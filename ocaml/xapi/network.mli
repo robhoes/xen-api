@@ -157,3 +157,26 @@ module Net :
 	end
 
 val transform_networkd_exn : [ `PIF ] API.Ref.t -> (unit -> 'a) -> 'a
+
+val driver_domain_devs :
+	__context:Context.t -> (string * string) list ->
+	(int * (int * int * int * int)) list
+
+val get_bond : API.pIF_t -> [ `Bond ] API.Ref.t option
+
+val get_vlan : API.pIF_t -> API.ref_VLAN option
+
+val get_tunnel : API.pIF_t -> [ `tunnel ] API.Ref.t option
+
+val get_pif_type :
+	API.pIF_t ->
+		[> `bond_pif of [ `Bond ] API.Ref.t
+			| `phy_pif
+			| `tunnel_pif of [ `tunnel ] API.Ref.t
+			| `vlan_pif of API.ref_VLAN ]
+
+val get_base_pif :
+	__context:Context.t -> [ `PIF ] API.Ref.t -> [ `PIF ] API.Ref.t list
+
+val get_driver_domain :
+	__context:Context.t -> [ `PIF ] API.Ref.t -> [ `VM ] API.Ref.t option
