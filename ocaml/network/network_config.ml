@@ -67,7 +67,9 @@ let read_management_conf () =
 			persistent_b = true
 		} in
 		{interface_config = [device, phy_interface; bridge_name, bridge_interface];
+			interface_domains = [];
 			bridge_config = [bridge_name, bridge];
+			bridge_domains = [];
 			gateway_interface = Some bridge_name; dns_interface = Some bridge_name}
 	with e ->
 		error "Error while trying to read firstboot data: %s\n%s"

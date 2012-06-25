@@ -68,6 +68,9 @@ module Net :
 					params:(string * string) list -> unit
 				val is_connected : string -> name:Network_interface.iface -> bool
 				val is_physical : string -> name:Network_interface.iface -> bool
+				val is_vif_front : string -> name:Network_interface.iface -> bool
+				val get_pci_bus_path :
+					string -> name:Network_interface.iface -> string
 				val bring_up : string -> name:Network_interface.iface -> unit
 				val bring_down : string -> name:Network_interface.iface -> unit
 				val is_persistent :
@@ -81,6 +84,14 @@ module Net :
 									Network_interface.interface_config_t)
 								 list ->
 					'a -> unit
+				val rename :
+					string ->
+					name:Network_interface.iface ->
+					new_name:Network_interface.iface -> unit
+				val set_driver_domain :
+					string ->
+					name:Network_interface.iface ->
+					uuid:Network_interface.domain -> unit
 			end
 		module Bridge :
 			sig
@@ -138,6 +149,10 @@ module Net :
 									Network_interface.bridge_config_t)
 								 list ->
 					'a -> unit
+				val set_driver_domain :
+					string ->
+					name:Network_interface.bridge ->
+					uuid:Network_interface.domain -> unit
 			end
 	end
 
