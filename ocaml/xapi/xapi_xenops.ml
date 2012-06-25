@@ -165,13 +165,30 @@ let vdi_of_disk ~__context x = match String.split ~limit:2 '/' x with
 			error "Failed to parse VDI name: %s" x;
 			None
 
-let backend_of_network net =
+let backend_of_network  ~__context (net_ref, net) =
 	if List.mem_assoc "backend_vm" net.API.network_other_config then begin
 		let backend_vm = List.assoc "backend_vm" net.API.network_other_config in
 		debug "Using VM %s as backend for VIF on network %s" backend_vm net.API.network_uuid;
 		Network.Remote (backend_vm, net.API.network_bridge)
 	end else
-		Network.Local net.API.network_bridge (* PR-1255 *)
+		try
+			let host = Helpers.get_localhost ~__context in
+			let local_pifs = Db.PIF.get_refs_where ~__context ~expr:(And (
+				Eq (Field "network", Literal (Ref.string_of net_ref)),
+				Eq (Field "host", Literal (Ref.string_of host))
+			)) in
+			match local_pifs with
+			| [] -> Network.Local net.API.network_bridge
+			| pif :: _ ->
+				let driver_domain = Network_client.get_driver_domain ~__context pif in
+				match driver_domain with
+				| None -> Network.Local net.API.network_bridge
+				| Some vm ->
+					let driver_dom_id = Db.VM.get_uuid ~__context ~self:vm in
+					debug "Network driver domain: %s" driver_dom_id;
+					Network.Remote (driver_dom_id, net.API.network_bridge)
+		with _ ->
+			Network.Local net.API.network_bridge
 
 let find f map default feature =
 	try f (List.assoc feature map)
@@ -412,7 +429,7 @@ module MD = struct
 			carrier = carrier;
 			mtu = mtu;
 			rate = rate;
-			backend = backend_of_network net;
+			backend = backend_of_network ~__context (vif.API.vIF_network, net);
 			other_config = vif.API.vIF_other_config;
 			locking_mode = locking_mode;
 			extra_private_keys = [
@@ -2215,8 +2232,8 @@ let vif_move ~__context ~self network =
 			assert_resident_on ~__context ~self:vm;
 			let vif = md_of_vif ~__context ~self in
 			info "xenops: VIF.move %s.%s" (fst vif.Vif.id) (snd vif.Vif.id);
-			let network = Db.Network.get_record ~__context ~self:network in
-			let backend = backend_of_network network in
+			let network_rec = Db.Network.get_record ~__context ~self:network in
+			let backend = backend_of_network ~__context (network, network_rec) in
 			let dbg = Context.string_of_task __context in
 			(* Nb., at this point, the database shows the vif on the new network *)
 			Xapi_network.attach_for_vif ~__context ~vif:self ();
