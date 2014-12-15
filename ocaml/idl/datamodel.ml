@@ -66,10 +66,6 @@ let creedence_release_schema_minor_vsn = 72
 let augusta_release_schema_major_vsn = 5
 let augusta_release_schema_minor_vsn = 81
 
-(* the schema vsn of the last release: used to determine whether we can upgrade or not.. *)
-let last_release_schema_major_vsn = clearwater_felton_release_schema_major_vsn
-let last_release_schema_minor_vsn = clearwater_felton_release_schema_minor_vsn
-
 (** Bindings for currently specified releases *)
 
 (** Name of variable which refers to reference in the parameter list *)
