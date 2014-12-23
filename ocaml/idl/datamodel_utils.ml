@@ -201,7 +201,7 @@ let named_self = ref false
 let self_of_obj x = 
   let self_name = if !named_self then x.name else _self in
   {param_type=Ref x.name; param_name=self_name; param_doc="reference to the object";
-   param_release=x.obj_release; param_default=None}
+   param_release=x.obj_release; param_default=None; param_map_keys=None}
 
 (** Compute the list of messages corresponding to a single field *)
 let new_messages_of_field x order fld = 
@@ -241,7 +241,7 @@ let new_messages_of_field x order fld =
 		   msg_name = prefix "set_";
  		   msg_params = [ self;
 				  {param_type=fld.ty; param_name=(if !named_self then fld.field_name else "value"); param_doc="New value to set";
-				   param_release=fld.release; param_default=None}
+				   param_release=fld.release; param_default=None; param_map_keys=None}
 				  ];
 		   msg_result = None;
                    msg_errors = [];
@@ -265,7 +265,7 @@ let new_messages_of_field x order fld =
 	{ common with
 	    msg_name = prefix "add_";
 	    msg_params = [ self;
-			   {param_type=t; param_name="value"; param_doc="New value to add"; param_release=fld.release; param_default=None} ];
+			   {param_type=t; param_name="value"; param_doc="New value to add"; param_release=fld.release; param_default=None; param_map_keys=None} ];
 	    msg_result = None;
 	    msg_doc = (sprintf
                          "Add the given value to the %s field of the given %s.  If the value is already in that Set, then do nothing."
@@ -275,7 +275,7 @@ let new_messages_of_field x order fld =
 	{ common with
 	    msg_name = prefix "remove_";
 	    msg_params = [ self;
-			   {param_type=t; param_name="value"; param_doc="Value to remove"; param_release=fld.release; param_default=None} ];
+			   {param_type=t; param_name="value"; param_doc="Value to remove"; param_release=fld.release; param_default=None; param_map_keys=None} ];
 	    msg_result = None;
 	    msg_doc = (sprintf
                          "Remove the given value from the %s field of the given %s.  If the value is not in that Set, then do nothing."
@@ -289,8 +289,8 @@ let new_messages_of_field x order fld =
 	{ common with
 	    msg_name = prefix "add_to_";
 	    msg_params = [ self;
-			   {param_type=k; param_name="key"; param_doc="Key to add"; param_release=fld.release; param_default=None};
-			   {param_type=v; param_name="value"; param_doc="Value to add"; param_release=fld.release; param_default=None}];
+			   {param_type=k; param_name="key"; param_doc="Key to add"; param_release=fld.release; param_default=None; param_map_keys=None};
+			   {param_type=v; param_name="value"; param_doc="Value to add"; param_release=fld.release; param_default=None; param_map_keys=None}];
 	    msg_result = None;
 	    msg_doc = (sprintf
                          "Add the given key-value pair to the %s field of the given %s."
@@ -301,7 +301,7 @@ let new_messages_of_field x order fld =
 	{ common with
 	    msg_name = prefix "remove_from_";
 	    msg_params = [ self;
-			   {param_type=k; param_name="key"; param_doc="Key to remove"; param_release=fld.release; param_default=None} ];
+			   {param_type=k; param_name="key"; param_doc="Key to remove"; param_release=fld.release; param_default=None; param_map_keys=None} ];
 	    msg_result = None;
 	    msg_doc = (sprintf
                          "Remove the given key and its corresponding value from the %s field of the given %s.  If the key is not in that Map, then do nothing."
@@ -343,7 +343,7 @@ let messages_of_obj (x: obj) document_order : message list =
 	       msg_params = [ {param_type=Record x.name;
                                param_name=(if !named_self then "record" else "args");
                                param_doc="All constructor arguments";
-			       param_release=x.obj_release; param_default = None
+			       param_release=x.obj_release; param_default = None; param_map_keys=None;
 			      }];
 	       msg_result = Some (Ref x.name, "reference to the newly created object");
 	       msg_doc = doccomment x "create";
@@ -366,7 +366,7 @@ let messages_of_obj (x: obj) document_order : message list =
   (* Get by UUID *)
   let uuid = { common with
            msg_name = "get_by_uuid";
-	       msg_params = [ {param_type=String; param_name="uuid"; param_doc="UUID of object to return"; param_release=x.obj_release; param_default = None} ];
+	       msg_params = [ {param_type=String; param_name="uuid"; param_doc="UUID of object to return"; param_release=x.obj_release; param_default = None; param_map_keys=None;} ];
 	       msg_result = Some (Ref x.name, "reference to the object");
 	       msg_doc = doccomment x "get_by_uuid";
 	       msg_async = false;
@@ -377,7 +377,7 @@ let messages_of_obj (x: obj) document_order : message list =
   (* Get by label *)
   let get_by_name_label = { common with
                msg_name = "get_by_name_label";
-		       msg_params = [ {param_type=String; param_name="label"; param_doc="label of object to return"; param_release=x.obj_release; param_default = None} ];
+		       msg_params = [ {param_type=String; param_name="label"; param_doc="label of object to return"; param_release=x.obj_release; param_default = None; param_map_keys=None;} ];
 		       msg_result = Some (Set(Ref x.name), "references to objects with matching names");
 	               msg_doc = doccomment x "get_by_name_label";
 		       msg_async = false;
@@ -436,7 +436,7 @@ let messages_of_obj (x: obj) document_order : message list =
 				  msg_name = "get_all_records_where";
 				  msg_tag = FromObject GetAllRecordsWhere;
 				  msg_params = [ {param_type=String; param_name="expr"; param_doc="expression representing records to fetch";
-						  param_release=x.obj_release; param_default = None}
+						  param_release=x.obj_release; param_default = None; param_map_keys=None;}
 						 ];
 				  msg_result = Some(Map(Ref x.name, Record x.name), "records of all matching objects");
 				  msg_release = {opensource=[]; internal=x.obj_release.internal; internal_deprecated_since=None};

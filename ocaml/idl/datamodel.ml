@@ -284,6 +284,15 @@ let get_deprecated lifecycle =
 		Some deprecated
 	with Not_found -> None
 
+let param ~name ~ty ~doc ?release ?default ?map_keys () =
+	let map_keys =
+		Opt.map (List.map (fun (map_key, map_doc) -> {map_key=VString map_key; map_lifecycle=[]; map_doc})) map_keys
+	in
+	name, ty, doc, release, default, map_keys
+
+let make_params =
+	List.map (fun (ty, name, doc) -> param ~ty ~name ~doc ())
+
 let call ~name ?(doc="") ?(in_oss_since=Some "3.0.3") ?in_product_since ?internal_deprecated_since
 	?result ?(flags=[`Session;`Async])
 	?(effect=true) ?(tag=Custom) ?(errs=[]) ?(custom_marshaller=false) ?(db_only=false)
@@ -291,8 +300,8 @@ let call ~name ?(doc="") ?(in_oss_since=Some "3.0.3") ?in_product_since ?interna
 	?(pool_internal=false)
 	~allowed_roles
 	?(map_keys_roles=[])
-	?(params=[]) ?versioned_params ?lifecycle () =
-	(* if you specify versioned_params then these get put in the params field of the message record;
+	?(params=[]) ?lifecycle () =
+	(* if you specify params then these get put in the params field of the message record;
 	 * otherwise params go in with no default values and param_release=call_release...
 	 *)
 	if lifecycle = None && in_product_since = None then
@@ -322,11 +331,13 @@ let call ~name ?(doc="") ?(in_oss_since=Some "3.0.3") ?in_product_since ?interna
 	{ 
 		msg_name = name;
 		msg_params =
-			(match versioned_params with
-			| None ->
-				List.map (fun (ptype, pname, pdoc) -> {param_type=ptype; param_name=pname;
-					param_doc=pdoc; param_release=call_release; param_default=None}) params
-			| Some ps -> ps);
+				List.map (fun (param_name, param_type, param_doc, param_release', param_default, param_map_keys) ->
+					{
+						param_type; param_name; param_doc; param_default; param_map_keys;
+						param_release = match param_release' with None -> call_release | Some r -> r
+					}
+				) params
+			;
 		msg_result = result; msg_doc = doc;
 		msg_session = List.mem `Session flags; msg_async = List.mem `Async flags;
 		msg_db_only = db_only;
@@ -348,8 +359,8 @@ let assert_operation_valid enum cls self = call
   ~in_product_since:rel_rio
   ~name:"assert_operation_valid"
   ~doc:"Check to see whether this operation is acceptable in the current state of the system, raising an error if the operation is invalid for some reason"
-  ~params:[Ref cls, self, "reference to the object";
-	   enum, "op", "proposed operation" ]
+  ~params:(make_params [Ref cls, self,  "reference to the object";
+	   enum, "op",  "proposed operation" ])
   ~allowed_roles:_R_POOL_ADMIN
   ()
 
@@ -358,7 +369,7 @@ let update_allowed_operations enum cls self = call
   ~in_product_since:rel_rio
   ~name:"update_allowed_operations"
   ~doc:"Recomputes the list of acceptable operations"
-  ~params:[Ref cls, self, "reference to the object"]
+  ~params:(make_params [Ref cls, self,  "reference to the object"])
   ~allowed_roles:_R_POOL_ADMIN
   ()
 
@@ -817,11 +828,11 @@ let _ =
 
   (* RBAC *)
   error Api_errors.role_not_found []
-    ~doc: "Role cannot be found." ();
+    ~doc:"Role cannot be found." ();
   error Api_errors.role_already_exists []
-    ~doc: "Role already exists." ();
+    ~doc:"Role already exists." ();
   error Api_errors.rbac_permission_denied ["permission";"message"]
-    ~doc: "RBAC permission denied." ();
+    ~doc:"RBAC permission denied." ();
 
   (* wlb errors, deprecated since clearwater *)
   error Api_errors.wlb_not_initialized []
@@ -1267,16 +1278,17 @@ let _ =
 
 (* Session.Login *)
 
+
 let session_login  = call ~flags:[]
   ~name:"login_with_password"
   ~in_product_since:rel_rio
   ~doc:"Attempt to authenticate the user, returning a session reference if successful"
   ~result:(Ref _session,"reference of newly created session")
-  ~versioned_params:
-  [{param_type=String; param_name="uname"; param_doc="Username for login."; param_release=rio_release; param_default=None};
-   {param_type=String; param_name="pwd"; param_doc="Password for login."; param_release=rio_release; param_default=None};
-   {param_type=String; param_name="version"; param_doc="Client API version."; param_release=miami_release; param_default=Some (VString "1.1")};
-   {param_type=String; param_name="originator"; param_doc="Key string for distinguishing different API users sharing the same login name."; param_release=clearwater_release; param_default=Some (VString "")}
+  ~params:
+  [param ~name:"uname" ~ty:(String) ~doc:"Username for login." ~release:rio_release ?default:None ();
+   param ~name:"pwd" ~ty:(String) ~doc:"Password for login." ~release:rio_release ?default:None ();
+   param ~name:"version" ~ty:(String) ~doc:"Client API version." ~release:miami_release ?default:(Some (VString "1.1")) ();
+   param ~name:"originator" ~ty:(String) ~doc:"Key string for distinguishing different API users sharing the same login name." ~release:clearwater_release ?default:(Some (VString "")) ()
   ]
   ~errs:[Api_errors.session_authentication_failed; Api_errors.host_is_slave]
   ~secret:true
@@ -1287,10 +1299,10 @@ let slave_login  = call ~flags:[]
   ~name:"slave_login"
   ~doc:"Attempt to authenticate to the pool master by presenting the slave's host ref and pool secret"
   ~result:(Ref _session,"ID of newly created session")
-  ~params:[
-	    Ref _host, "host", "Host id of slave";
-	    String, "psecret", "Pool secret"
-	  ]
+  ~params:(make_params [
+	    Ref _host, "host",  "Host id of slave";
+	    String, "psecret",  "Pool secret"
+	  ])
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~secret:true
@@ -1303,9 +1315,9 @@ let slave_local_login = call ~flags:[]
   ~name:"slave_local_login"
   ~doc:"Authenticate locally against a slave in emergency mode. Note the resulting sessions are only good for use on this host."
   ~result:(Ref _session,"ID of newly created session")
-  ~params:[
-	    String, "psecret", "Pool secret"
-	  ]
+  ~params:(make_params [
+	    String, "psecret",  "Pool secret"
+	  ])
   ~in_oss_since:None
   ~secret:true
   ~hide_from_docs:true
@@ -1317,10 +1329,10 @@ let slave_local_login_with_password = call ~flags:[]
   ~name:"slave_local_login_with_password"
   ~doc:"Authenticate locally against a slave in emergency mode. Note the resulting sessions are only good for use on this host."
   ~result:(Ref _session,"ID of newly created session")
-  ~params:[
-	    String, "uname", "Username for login.";
-            String, "pwd", "Password for login.";
-	  ]
+  ~params:(make_params [
+	    String, "uname",  "Username for login.";
+            String, "pwd",  "Password for login.";
+	  ])
   ~in_oss_since:None
   ~secret:true
   ~allowed_roles:_R_POOL_ADMIN (*only root can do an emergency slave login*)
@@ -1330,7 +1342,7 @@ let local_logout = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"local_logout"
   ~doc:"Log out of local session."
-  ~params:[]
+  ~params:(make_params [])
   ~in_oss_since:None
   ~allowed_roles:_R_POOL_ADMIN (*system can destroy a local session*)
   ()
@@ -1341,17 +1353,17 @@ let session_logout = call ~flags:[`Session]
   ~in_product_since:rel_rio
   ~name:"logout"
   ~doc:"Log out of a session"
-  ~params:[]
+  ~params:(make_params [])
   ~allowed_roles:_R_ALL (*any role can destroy a known user session*)
   ()
 
 let session_chpass = call ~flags:[`Session]
   ~name:"change_password"
   ~doc:"Change the account password; if your session is authenticated with root priviledges then the old_pwd is validated and the new_pwd is set regardless"
-  ~params:[
-	    String, "old_pwd", "Old password for account";
-	    String, "new_pwd", "New password for account"
-	  ]
+  ~params:(make_params [
+	    String, "old_pwd",  "Old password for account";
+	    String, "new_pwd",  "New password for account"
+	  ])
   ~in_product_since:rel_rio
   ~in_oss_since:None
   ~allowed_roles:_R_LOCAL_ROOT_ONLY (*not even pool-admin can change passwords, only root*)
@@ -1362,7 +1374,7 @@ let session_get_all_subject_identifiers = call
   ~name:"get_all_subject_identifiers"
   ~doc:"Return a list of all the user subject-identifiers of all existing sessions"
   ~result:(Set (String), "The list of user subject-identifiers of all existing sessions")
-  ~params:[]
+  ~params:(make_params [])
   ~in_product_since:rel_george
   ~in_oss_since:None
   ~allowed_roles:_R_ALL
@@ -1372,9 +1384,9 @@ let session_get_all_subject_identifiers = call
 let session_logout_subject_identifier = call
   ~name:"logout_subject_identifier"
   ~doc:"Log out all sessions associated to a user subject-identifier, except the session associated with the context calling this function"
-  ~params:[
-	    String, "subject_identifier", "User subject-identifier of the sessions to be destroyed"
-	  ]
+  ~params:(make_params [
+	    String, "subject_identifier",  "User subject-identifier of the sessions to be destroyed"
+	  ])
   ~in_product_since:rel_george
   ~in_oss_since:None
   ~allowed_roles:_R_POOL_OP
@@ -1411,7 +1423,7 @@ let vm_get_boot_record = call
   ~in_product_since:rel_rio
   ~doc:"Returns a record describing the VM's dynamic state, initialised when the VM boots and updated to reflect runtime configuration changes e.g. CPU hotplug"
   ~result:(Record _vm, "A record describing the VM")
-  ~params:[Ref _vm, "self", "The VM whose boot-time state to return"]
+  ~params:(make_params [Ref _vm, "self",  "The VM whose boot-time state to return"])
   ~errs:[]
   ~flags:[`Session] (* no async *)
   ~allowed_roles:_R_READ_ONLY
@@ -1423,7 +1435,7 @@ let vm_get_data_sources = call
   ~in_product_since:rel_orlando
   ~doc:""
   ~result:(Set (Record _data_source), "A set of data sources")
-  ~params:[Ref _vm, "self", "The VM to interrogate"]
+  ~params:(make_params [Ref _vm, "self",  "The VM to interrogate"])
   ~errs:[]
   ~flags:[`Session] 
   ~allowed_roles:_R_READ_ONLY
@@ -1434,8 +1446,8 @@ let vm_record_data_source = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Start recording the specified data source"
-  ~params:[Ref _vm, "self", "The VM";
-	   String, "data_source", "The data source to record"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   String, "data_source",  "The data source to record"])
   ~errs:[]
   ~flags:[`Session]
   ~allowed_roles:_R_VM_ADMIN
@@ -1446,8 +1458,8 @@ let vm_query_data_source = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Query the latest value of the specified data source"
-  ~params:[Ref _vm, "self", "The VM";
-	   String, "data_source", "The data source to query"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   String, "data_source",  "The data source to query"])
   ~result:(Float,"The latest value, averaged over the last 5 seconds")
   ~errs:[]
   ~flags:[`Session]
@@ -1459,8 +1471,8 @@ let vm_forget_data_source_archives = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Forget the recorded statistics related to the specified data source"
-  ~params:[Ref _vm, "self", "The VM";
-	   String, "data_source", "The data source whose archives are to be forgotten"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   String, "data_source",  "The data source whose archives are to be forgotten"])
   ~flags:[`Session]
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -1470,8 +1482,8 @@ let vm_set_ha_always_run = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Set the value of the ha_always_run"
-  ~params:[Ref _vm, "self", "The VM";
-	   Bool, "value", "The value"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   Bool, "value",  "The value"])
   ~flags:[`Session]
   ~allowed_roles:_R_POOL_OP
   ~internal_deprecated_since:rel_boston
@@ -1482,8 +1494,8 @@ let vm_set_ha_restart_priority = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Set the value of the ha_restart_priority field"
-  ~params:[Ref _vm, "self", "The VM";
-	   String, "value", "The value"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   String, "value",  "The value"])
   ~flags:[`Session]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -1495,10 +1507,10 @@ let vm_clone = call
   ~in_product_since:rel_rio
   ~doc:"Clones the specified VM, making a new VM. Clone automatically exploits the capabilities of the underlying storage repository in which the VM's disk images are stored (e.g. Copy on Write).   This function can only be called when the VM is in the Halted State."
   ~result:(Ref _vm, "The reference of the newly created VM.")
-  ~params:[
-	    Ref _vm, "vm", "The VM to be cloned";
-	    String, "new_name", "The name of the cloned VM"
-	  ]
+  ~params:(make_params [
+	    Ref _vm, "vm",  "The VM to be cloned";
+	    String, "new_name",  "The name of the cloned VM"
+	  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed]
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -1511,11 +1523,11 @@ let vm_copy = call
 	Extended, rel_cowley, "The copy can now be performed between any two SRs." ]
   ~doc:"Copied the specified VM, making a new VM. Unlike clone, copy does not exploits the capabilities of the underlying storage repository in which the VM's disk images are stored. Instead, copy guarantees that the disk images of the newly created VM will be 'full disks' - i.e. not part of a CoW chain.  This function can only be called when the VM is in the Halted State."
   ~result:(Ref _vm, "The reference of the newly created VM.")
-  ~params:[
-	    Ref _vm, "vm", "The VM to be copied";
-	    String, "new_name", "The name of the copied VM";
-	    Ref _sr, "sr", "An SR to copy all the VM's disks into (if an invalid reference then it uses the existing SRs)";
-	  ]
+  ~params:(make_params [
+	    Ref _vm, "vm",  "The VM to be copied";
+	    String, "new_name",  "The name of the copied VM";
+	    Ref _sr, "sr",  "An SR to copy all the VM's disks into (if an invalid reference then it uses the existing SRs)";
+	  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed]
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -1526,10 +1538,10 @@ let vm_snapshot_with_quiesce = call
   ~in_product_since: rel_orlando
   ~doc:"Snapshots the specified VM with quiesce, making a new VM. Snapshot automatically exploits the capabilities of the underlying storage repository in which the VM's disk images are stored (e.g. Copy on Write)."
   ~result: (Ref _vm, "The reference of the newly created VM.")
-  ~params:[
-    Ref _vm, "vm", "The VM to be snapshotted";
-    String, "new_name", "The name of the snapshotted VM"
-  ]
+  ~params:(make_params [
+    Ref _vm, "vm",  "The VM to be snapshotted";
+    String, "new_name",  "The name of the snapshotted VM"
+  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed;
 		Api_errors.vm_snapshot_with_quiesce_failed;
 		Api_errors.vm_snapshot_with_quiesce_timeout;
@@ -1544,11 +1556,11 @@ let vm_update_snapshot_metadata = call
   ~internal_deprecated_since:rel_midnight_ride
   ~doc:""
   ~hide_from_docs:true
-  ~params:[
-    Ref _vm, "vm", "The VM to update";
-    Ref _vm, "snapshot_of", "";
-    DateTime, "snapshot_time", "";
-    String, "transportable_snapshot_id", "" ]
+  ~params:(make_params [
+    Ref _vm, "vm",  "The VM to update";
+    Ref _vm, "snapshot_of",  "";
+    DateTime, "snapshot_time",  "";
+    String, "transportable_snapshot_id",  "" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -1557,10 +1569,10 @@ let vm_snapshot = call
   ~in_product_since: rel_orlando
   ~doc:"Snapshots the specified VM, making a new VM. Snapshot automatically exploits the capabilities of the underlying storage repository in which the VM's disk images are stored (e.g. Copy on Write)."
   ~result: (Ref _vm, "The reference of the newly created VM.")
-  ~params:[
-    Ref _vm, "vm", "The VM to be snapshotted";
-    String, "new_name", "The name of the snapshotted VM"
-  ]
+  ~params:(make_params [
+    Ref _vm, "vm",  "The VM to be snapshotted";
+    String, "new_name",  "The name of the snapshotted VM"
+  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed]
   ~allowed_roles:_R_VM_POWER_ADMIN
   ()
@@ -1569,7 +1581,7 @@ let vm_revert = call
   ~name:"revert"
   ~in_product_since: rel_midnight_ride
   ~doc:"Reverts the specified VM to a previous state."
-  ~params:[Ref _vm, "snapshot", "The snapshotted state that we revert to"]
+  ~params:(make_params [Ref _vm, "snapshot",  "The snapshotted state that we revert to"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.operation_not_allowed;
 		Api_errors.sr_full; Api_errors.vm_revert_failed ]
   ~allowed_roles:_R_VM_POWER_ADMIN
@@ -1580,10 +1592,10 @@ let vm_checkpoint = call
   ~in_product_since: rel_midnight_ride
   ~doc:"Checkpoints the specified VM, making a new VM. Checkpoint automatically exploits the capabilities of the underlying storage repository in which the VM's disk images are stored (e.g. Copy on Write) and saves the memory image as well."
   ~result: (Ref _vm, "The reference of the newly created VM.")
-  ~params:[
-    Ref _vm, "vm", "The VM to be checkpointed";
-    String, "new_name", "The name of the checkpointed VM"
-  ]
+  ~params:(make_params [
+    Ref _vm, "vm",  "The VM to be checkpointed";
+    String, "new_name",  "The name of the checkpointed VM"
+  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed;
 		Api_errors.vm_checkpoint_suspend_failed; Api_errors.vm_checkpoint_resume_failed]
   ~allowed_roles:_R_VM_POWER_ADMIN
@@ -1596,10 +1608,10 @@ let vm_create_template = call
   ~in_product_since:rel_midnight_ride
   ~doc:"Deprecated: use VM.clone or VM.copy instead."
   ~result:(Ref _vm, "")
-  ~params:[
-	    Ref _vm, "vm", "";
-	    String, "new_name", ""
-	  ]
+  ~params:(make_params [
+	    Ref _vm, "vm",  "";
+	    String, "new_name",  ""
+	  ])
   ~errs:[]
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -1608,13 +1620,24 @@ let vm_import_convert = call
 	~name:"import_convert"
   ~in_product_since:rel_tampa
 	~doc:"Import using a conversion service."
-	~params:[
+	~params:(make_params [
 		String, "type", "Type of the conversion";
 		String, "username", "Admin username on the host";
 		String, "password", "Password on the host";
 		Ref _sr, "sr", "The destination SR";
-		Map(String, String), "remote_config", "Remote configuration options"
-	]
+		] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"remote_config"
+			~doc:"Remote configuration options"
+			~map_keys:[
+				"hostname", "remote hostname";
+				"username", "remote username";
+				"password", "remote password";
+				"vm-name", "remote vm name";
+			] ()
+		]
+	)
 	~errs:[]
 	~allowed_roles:_R_VM_ADMIN
 	()
@@ -1624,9 +1647,9 @@ let vm_import_convert = call
 let vm_provision = call
   ~name:"provision"
   ~doc:"Inspects the disk configuration contained within the VM's other_config, creates VDIs and VBDs and then executes any applicable post-install script."
-  ~params:[
-	    Ref _vm, "vm", "The VM to be provisioned";
-	  ]
+  ~params:(make_params [
+	    Ref _vm, "vm",  "The VM to be provisioned";
+	  ])
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.sr_full; Api_errors.operation_not_allowed]
@@ -1639,11 +1662,11 @@ let vm_start = call
 	~name:"start"
 	~in_product_since:rel_rio
 	~doc:"Start the specified VM.  This function can only be called with the VM is in the Halted State."
-	~params:[
-		Ref _vm, "vm", "The VM to start";
-		Bool, "start_paused", "Instantiate VM in paused state if set to true.";
-		Bool, "force", "Attempt to force the VM to start. If this flag is false then the VM may fail pre-boot safety checks (e.g. if the CPU the VM last booted on looks substantially different to the current one)";
-	]
+	~params:(make_params [
+		Ref _vm, "vm",  "The VM to start";
+		Bool, "start_paused",  "Instantiate VM in paused state if set to true.";
+		Bool, "force",  "Attempt to force the VM to start. If this flag is false then the VM may fail pre-boot safety checks (e.g. if the CPU the VM last booted on looks substantially different to the current one)";
+	])
 	~errs:[
 		Api_errors.vm_bad_power_state;
 		Api_errors.vm_hvm_required;
@@ -1662,10 +1685,10 @@ let vm_assert_can_boot_here = call
 	~name:"assert_can_boot_here"
 	~in_product_since:rel_rio
 	~doc:"Returns an error if the VM could not boot on this host for some reason"
-	~params:[
-		Ref _vm, "self", "The VM";
-		Ref _host, "host", "The host";
-	]
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+		Ref _host, "host",  "The host";
+	])
 	~allowed_roles:_R_READ_ONLY
 	~errs:[
 		Api_errors.host_not_enough_free_memory;
@@ -1678,7 +1701,7 @@ let vm_assert_agile = call
 	~name:"assert_agile"
 	~in_product_since:rel_orlando
 	~doc:"Returns an error if the VM is not considered agile e.g. because it is tied to a resource local to a host"
-	~params:[Ref _vm, "self", "The VM"]
+	~params:(make_params [Ref _vm, "self",  "The VM"])
 	~allowed_roles:_R_READ_ONLY
 	()
 
@@ -1686,7 +1709,7 @@ let vm_get_possible_hosts = call
 	~name:"get_possible_hosts"
 	~in_product_since:rel_rio
 	~doc:"Return the list of hosts on which this VM may run."
-	~params:[Ref _vm, "vm", "The VM" ]
+	~params:(make_params [Ref _vm, "vm",  "The VM" ])
 	~result:(Set (Ref _host), "The possible hosts")
 	~allowed_roles:_R_READ_ONLY
 	()
@@ -1695,7 +1718,7 @@ let vm_retrieve_wlb_recommendations = call
 	~name:"retrieve_wlb_recommendations"
 	~in_product_since:rel_george
 	~doc:"Returns mapping of hosts to ratings, indicating the suitability of starting the VM at that location according to wlb. Rating is replaced with an error if the VM cannot boot there."
-	~params:[Ref _vm, "vm", "The VM";]
+	~params:(make_params [Ref _vm, "vm",  "The VM";])
 	~result:(Map (Ref _host, Set(String)), "The potential hosts and their corresponding recommendations or errors")
 	~allowed_roles:_R_READ_ONLY
 	()
@@ -1705,10 +1728,10 @@ let vm_maximise_memory = call
   ~in_product_since:rel_miami
   ~name:"maximise_memory"
   ~doc:"Returns the maximum amount of guest memory which will fit, together with overheads, in the supplied amount of physical memory. If 'exact' is true then an exact calculation is performed using the VM's current settings. If 'exact' is false then a more conservative approximation is used"
-  ~params:[Ref _vm, "self", "The VM";
-	   Int, "total", "Total amount of physical RAM to fit within";
-	   Bool, "approximate", "If false the limit is calculated with the guest's current exact configuration. Otherwise a more approximate calculation is performed";
-	  ]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+	   Int, "total",  "Total amount of physical RAM to fit within";
+	   Bool, "approximate",  "If false the limit is calculated with the guest's current exact configuration. Otherwise a more approximate calculation is performed";
+	  ])
   ~result:(Int, "The maximum possible static-max")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -1717,7 +1740,7 @@ let vm_get_allowed_VBD_devices = call ~flags:[`Session] ~no_current_operations:t
   ~in_product_since:rel_rio
   ~name:"get_allowed_VBD_devices"
   ~doc:"Returns a list of the allowed values that a VBD device field can take"
-  ~params:[Ref _vm,"vm","The VM to query"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to query"])
   ~result:(Set String, "The allowed values")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -1726,7 +1749,7 @@ let vm_get_allowed_VIF_devices = call ~flags:[`Session] ~no_current_operations:t
   ~in_product_since:rel_rio
   ~name:"get_allowed_VIF_devices"
   ~doc:"Returns a list of the allowed values that a VIF device field can take"
-  ~params:[Ref _vm,"vm","The VM to query"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to query"])
   ~result:(Set String, "The allowed values")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -1740,9 +1763,9 @@ let vm_atomic_set_resident_on = call
   ~hide_from_docs:true
   ~name:"atomic_set_resident_on"
   ~doc:""
-  ~params:[Ref _vm, "vm", "The VM to modify";
-	   Ref _host, "host", "The host to set resident_on to"
-          ]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to modify";
+	   Ref _host, "host",  "The host to set resident_on to"
+          ])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -1750,7 +1773,7 @@ let vm_compute_memory_overhead = call
 	~in_product_since:rel_midnight_ride
 	~name:"compute_memory_overhead"
 	~doc:"Computes the virtualization memory overhead of a VM."
-	~params:[Ref _vm, "vm", "The VM for which to compute the memory overhead"]
+	~params:(make_params [Ref _vm, "vm",  "The VM for which to compute the memory overhead"])
 	~pool_internal:false
 	~hide_from_docs:false
 	~result:(Int, "the virtualization memory overhead of the VM.")
@@ -1761,10 +1784,10 @@ let vm_set_memory_dynamic_max = call ~flags:[`Session]
 	~in_product_since:rel_midnight_ride
 	~name:"set_memory_dynamic_max"
 	~doc:"Set the value of the memory_dynamic_max field"
-	~params:[
-		Ref _vm, "self", "The VM to modify";
-		Int, "value", "The new value of memory_dynamic_max";
-	]
+	~params:(make_params [
+		Ref _vm, "self",  "The VM to modify";
+		Int, "value",  "The new value of memory_dynamic_max";
+	])
 	~allowed_roles:_R_VM_POWER_ADMIN
 	~errs:[] ()
 
@@ -1772,10 +1795,10 @@ let vm_set_memory_dynamic_min = call ~flags:[`Session]
 	~in_product_since:rel_midnight_ride
 	~name:"set_memory_dynamic_min"
 	~doc:"Set the value of the memory_dynamic_min field"
-	~params:[
-		Ref _vm, "self", "The VM to modify";
-		Int, "value", "The new value of memory_dynamic_min";
-	]
+	~params:(make_params [
+		Ref _vm, "self",  "The VM to modify";
+		Int, "value",  "The new value of memory_dynamic_min";
+	])
 	~allowed_roles:_R_VM_POWER_ADMIN
 	~errs:[] ()
 
@@ -1785,11 +1808,11 @@ let vm_set_memory_dynamic_range = call
 	~doc:"Set the minimum and maximum amounts of physical memory the VM is \
 		allowed to use."
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[
-		Ref _vm, "self", "The VM";
-		Int, "min", "The new minimum value";
-		Int, "max", "The new maximum value";
-	] ()
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+		Int, "min",  "The new minimum value";
+		Int, "max",  "The new maximum value";
+	]) ()
 
 (* When HA is enabled we need to prevent memory *)
 (* changes which will break the recovery plan.  *)
@@ -1799,10 +1822,10 @@ let vm_set_memory_static_max = call ~flags:[`Session]
 	~doc:"Set the value of the memory_static_max field"
 	~errs:[Api_errors.ha_operation_would_break_failover_plan]
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[
-		Ref _vm, "self", "The VM to modify";
-		Int, "value", "The new value of memory_static_max";
-	] ()
+	~params:(make_params [
+		Ref _vm, "self",  "The VM to modify";
+		Int, "value",  "The new value of memory_static_max";
+	]) ()
 
 let vm_set_memory_static_min = call ~flags:[`Session]
 	~in_product_since:rel_midnight_ride
@@ -1810,10 +1833,10 @@ let vm_set_memory_static_min = call ~flags:[`Session]
 	~doc:"Set the value of the memory_static_min field"
 	~errs:[]
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[
-		Ref _vm, "self", "The VM to modify";
-		Int, "value", "The new value of memory_static_min";
-	] ()
+	~params:(make_params [
+		Ref _vm, "self",  "The VM to modify";
+		Int, "value",  "The new value of memory_static_min";
+	]) ()
 
 let vm_set_memory_static_range = call
 	~name:"set_memory_static_range"
@@ -1821,22 +1844,22 @@ let vm_set_memory_static_range = call
 	~doc:"Set the static (ie boot-time) range of virtual memory that the VM is \
 		allowed to use."
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[Ref _vm, "self", "The VM";
-		Int, "min", "The new minimum value";
-		Int, "max", "The new maximum value";
-	] ()
+	~params:(make_params [Ref _vm, "self", "The VM";
+		Int, "min",  "The new minimum value";
+		Int, "max",  "The new maximum value";
+	]) ()
 
 let vm_set_memory_limits = call
 	~name:"set_memory_limits"
 	~in_product_since:rel_midnight_ride
 	~doc:"Set the memory limits of this VM."
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[Ref _vm, "self", "The VM";
-		Int, "static_min", "The new value of memory_static_min.";
-		Int, "static_max", "The new value of memory_static_max.";
-		Int, "dynamic_min", "The new value of memory_dynamic_min.";
-		Int, "dynamic_max", "The new value of memory_dynamic_max.";
-	] ()
+	~params:(make_params [Ref _vm, "self", "The VM";
+		Int, "static_min",  "The new value of memory_static_min.";
+		Int, "static_max",  "The new value of memory_static_max.";
+		Int, "dynamic_min",  "The new value of memory_dynamic_min.";
+		Int, "dynamic_max",  "The new value of memory_dynamic_max.";
+	]) ()
 
 let vm_set_memory_target_live = call
 	~name:"set_memory_target_live"
@@ -1844,10 +1867,10 @@ let vm_set_memory_target_live = call
 	~internal_deprecated_since:rel_midnight_ride
 	~doc:"Set the memory target for a running VM"
 	~allowed_roles:_R_VM_POWER_ADMIN
-	~params:[
-		Ref _vm, "self", "The VM";
-		Int, "target", "The target in bytes";
-	] ()
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+		Int, "target",  "The target in bytes";
+	]) ()
 
 let vm_wait_memory_target_live = call
 	~name:"wait_memory_target_live"
@@ -1855,18 +1878,18 @@ let vm_wait_memory_target_live = call
 	~internal_deprecated_since:rel_midnight_ride
 	~doc:"Wait for a running VM to reach its current memory target"
 	~allowed_roles:_R_READ_ONLY
-	~params:[
-		Ref _vm, "self", "The VM";
-	] ()
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+	]) ()
 
 let vm_get_cooperative = call
 	~name:"get_cooperative"
 	~in_product_since:rel_midnight_ride
 	~internal_deprecated_since:rel_tampa
 	~doc:"Return true if the VM is currently 'co-operative' i.e. is expected to reach a balloon target and actually has done"
-	~params:[
-		Ref _vm, "self", "The VM";
-	]
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+	])
 	~result:(Bool, "true if the VM is currently 'co-operative'; false otherwise")
 	~allowed_roles:_R_READ_ONLY
 	()
@@ -1875,9 +1898,9 @@ let vm_query_services = call
 	~name:"query_services"
 	~in_product_since:rel_tampa
 	~doc:"Query the system services advertised by this VM and register them. This can only be applied to a system domain."
-	~params:[
-		Ref _vm, "self", "The VM";
-	]
+	~params:(make_params [
+		Ref _vm, "self",  "The VM";
+	])
 	~result:(Map(String, String), "map of service type to name")
 	~allowed_roles:_R_POOL_ADMIN
 	()
@@ -1889,11 +1912,11 @@ let vm_start_on = call
   ~name:"start_on"
   ~doc:"Start the specified VM on a particular host.  This function can only be called with the VM is in the Halted State."
   ~in_oss_since:None
-  ~params:[Ref _vm, "vm", "The VM to start";
-	   Ref _host, "host", "The Host on which to start the VM";
-           Bool, "start_paused", "Instantiate VM in paused state if set to true.";
-	   Bool, "force", "Attempt to force the VM to start. If this flag is false then the VM may fail pre-boot safety checks (e.g. if the CPU the VM last booted on looks substantially different to the current one)";
-	  ]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to start";
+	   Ref _host, "host",  "The Host on which to start the VM";
+           Bool, "start_paused",  "Instantiate VM in paused state if set to true.";
+	   Bool, "force",  "Attempt to force the VM to start. If this flag is false then the VM may fail pre-boot safety checks (e.g. if the CPU the VM last booted on looks substantially different to the current one)";
+	  ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.vm_is_template; Api_errors.other_operation_in_progress;
          Api_errors.operation_not_allowed;
 	 Api_errors.bootloader_failed;
@@ -1908,7 +1931,7 @@ let vm_pause = call
   ~in_product_since:rel_rio
   ~name:"pause"
   ~doc:"Pause the specified VM. This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM to pause"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to pause"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -1920,7 +1943,7 @@ let vm_unpause = call
   ~in_product_since:rel_rio
   ~name:"unpause"
   ~doc:"Resume the specified VM. This can only be called when the specified VM is in the Paused state."
-  ~params:[Ref _vm, "vm", "The VM to unpause"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to unpause"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.operation_not_allowed; Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
   ()  
@@ -1932,7 +1955,7 @@ let vm_cleanShutdown = call
   ~in_product_since:rel_rio
   ~name:"clean_shutdown"
   ~doc:"Attempt to cleanly shutdown the specified VM. (Note: this may not be supported---e.g. if a guest agent is not installed). This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM to shutdown"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to shutdown"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -1944,7 +1967,7 @@ let vm_cleanReboot = call
   ~in_product_since:rel_rio
   ~name:"clean_reboot"
   ~doc:"Attempt to cleanly shutdown the specified VM (Note: this may not be supported---e.g. if a guest agent is not installed). This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM to shutdown"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to shutdown"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -1956,7 +1979,7 @@ let vm_hardShutdown = call
   ~in_product_since:rel_rio
   ~name:"hard_shutdown"
   ~doc:"Stop executing the specified VM without attempting a clean shutdown."
-  ~params:[Ref _vm, "vm", "The VM to destroy"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to destroy"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -1968,7 +1991,7 @@ let vm_shutdown = call
   ~in_product_since:rel_clearwater
   ~name:"shutdown"
   ~doc:"Attempts to first clean shutdown a VM and if it should fail then perform a hard shutdown on it."
-  ~params:[Ref _vm, "vm", "The VM to shutdown"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to shutdown"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -1980,7 +2003,7 @@ let vm_stateReset = call
   ~in_product_since:rel_rio
   ~name:"power_state_reset"
   ~doc:"Reset the power-state of the VM to halted in the database only. (Used to recover from slave failures in pooling scenarios by resetting the power-states of VMs running on dead slaves to halted.) This is a potentially dangerous operation; use with care."
-  ~params:[Ref _vm, "vm", "The VM to reset"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to reset"])
   ~errs:[]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -1991,7 +2014,7 @@ let vm_hardReboot = call
   ~in_product_since:rel_rio
   ~name:"hard_reboot"
   ~doc:"Stop executing the specified VM without attempting a clean shutdown and immediately restart the VM."
-  ~params:[Ref _vm, "vm", "The VM to reboot"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to reboot"])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
          Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
@@ -2001,7 +2024,7 @@ let vm_hardReboot_internal = call
   ~in_product_since:rel_orlando
   ~name:"hard_reboot_internal"
   ~doc:"Internal function which immediately restarts the specified VM."
-  ~params:[Ref _vm, "vm", "The VM to reboot"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to reboot"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~internal_deprecated_since:rel_midnight_ride
@@ -2014,7 +2037,7 @@ let vm_suspend = call
   ~in_product_since:rel_rio
   ~name:"suspend"
   ~doc:"Suspend the specified VM to disk.  This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM to suspend"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to suspend"])
       (*	    Bool, "live", "If set to true, perform a live hibernate; otherwise suspend the VM before commencing hibernate" *)
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.operation_not_allowed;
 	 Api_errors.vm_is_template]
@@ -2026,7 +2049,7 @@ let csvm = call
   ~name:"csvm"
   ~in_product_since:rel_rio
   ~doc:"undocumented. internal use only. This call is deprecated."
-  ~params:[Ref _vm, "vm", ""]
+  ~params:(make_params [Ref _vm, "vm",  ""])
   ~result:(Ref _vm, "")
   ~errs:[]
   ~hide_from_docs:true
@@ -2040,10 +2063,10 @@ let vm_resume = call
   ~name:"resume"
   ~in_product_since:rel_rio
   ~doc:"Awaken the specified VM and resume it.  This can only be called when the specified VM is in the Suspended state."
-  ~params:[Ref _vm, "vm", "The VM to resume";
-           Bool, "start_paused", "Resume VM in paused state if set to true.";
-           Bool, "force", "Attempt to force the VM to resume. If this flag is false then the VM may fail pre-resume safety checks (e.g. if the CPU the VM was running on looks substantially different to the current one)";
-          ]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to resume";
+           Bool, "start_paused",  "Resume VM in paused state if set to true.";
+           Bool, "force",  "Attempt to force the VM to resume. If this flag is false then the VM may fail pre-resume safety checks (e.g. if the CPU the VM was running on looks substantially different to the current one)";
+          ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.operation_not_allowed; Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_OP
   ()
@@ -2053,11 +2076,11 @@ let vm_resume_on = call
   ~in_product_since:rel_rio
   ~doc:"Awaken the specified VM and resume it on a particular Host.  This can only be called when the specified VM is in the Suspended state."
   ~in_oss_since:None
-  ~params:[Ref _vm, "vm", "The VM to resume";
-	   Ref _host, "host", "The Host on which to resume the VM";
-           Bool, "start_paused", "Resume VM in paused state if set to true.";
-	   Bool, "force", "Attempt to force the VM to resume. If this flag is false then the VM may fail pre-resume safety checks (e.g. if the CPU the VM was running on looks substantially different to the current one)";
-]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to resume";
+	   Ref _host, "host",  "The Host on which to resume the VM";
+           Bool, "start_paused",  "Resume VM in paused state if set to true.";
+	   Bool, "force",  "Attempt to force the VM to resume. If this flag is false then the VM may fail pre-resume safety checks (e.g. if the CPU the VM was running on looks substantially different to the current one)";
+])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.operation_not_allowed; Api_errors.vm_is_template]
   ~allowed_roles:_R_VM_POWER_ADMIN
   ()
@@ -2067,9 +2090,15 @@ let vm_pool_migrate = call
   ~in_product_since:rel_rio
   ~name:"pool_migrate"
   ~doc:"Migrate a VM to another Host. This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM to migrate";
-	   Ref _host, "host", "The target host";
-	   Map(String, String), "options", "Extra configuration operations" ]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to migrate";
+    Ref _host, "host",  "The target host"] @ [
+    param
+        ~ty:(Map(String, String))
+        ~name:"options"
+        ~doc:"Extra configuration operations"
+        ~map_keys:["force", "Attempt to force the VM to migrate."]
+        ()
+    ])
   ~errs:[Api_errors.vm_bad_power_state; Api_errors.other_operation_in_progress; Api_errors.vm_is_template; Api_errors.operation_not_allowed; Api_errors.vm_migrate_failed]
   ~allowed_roles:_R_VM_POWER_ADMIN
   ()
@@ -2079,8 +2108,8 @@ let vm_pool_migrate_complete = call
   ~in_product_since:rel_tampa
   ~name:"pool_migrate_complete"
   ~doc:"Tell a destination host that migration is complete."
-  ~params:[Ref _vm, "vm", "The VM which has finished migrating";
-	   Ref _host, "host", "The target host" ]
+  ~params:(make_params [Ref _vm, "vm",  "The VM which has finished migrating";
+	   Ref _host, "host",  "The target host" ])
   ~hide_from_docs:true
   ~pool_internal:false (* needed for cross-pool migrate too *)
   ~allowed_roles:_R_VM_POWER_ADMIN
@@ -2091,9 +2120,9 @@ let host_migrate_receive = call
   ~in_product_since:rel_tampa
   ~name:"migrate_receive"
   ~doc:"Prepare to receive a VM, returning a token which can be passed to VM.migrate."
-  ~params:[Ref _host, "host", "The target host";
-    Ref _network, "network", "The network through which migration traffic should be received.";
-    Map(String, String), "options", "Extra configuration operations" ]
+  ~params:(make_params [Ref _host, "host",  "The target host";
+    Ref _network, "network",  "The network through which migration traffic should be received.";
+    Map(String, String), "options",  "Extra configuration operations" ])
   ~result:(Map(String,String), "A value which should be passed to VM.migrate")
   ~allowed_roles:_R_VM_POWER_ADMIN
   ()
@@ -2102,8 +2131,8 @@ let set_vcpus_number_live = call
 	~name:"set_VCPUs_number_live"
 	~in_product_since:rel_rio
 	~doc:"Set the number of VCPUs for a running VM"
-	~params:[Ref _vm, "self", "The VM";
-		Int, "nvcpu", "The number of VCPUs"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+		Int, "nvcpu",  "The number of VCPUs"])
 	~allowed_roles:_R_VM_ADMIN
 	()
 
@@ -2111,8 +2140,8 @@ let vm_set_VCPUs_max = call ~flags:[`Session]
 	~name:"set_VCPUs_max"
 	~in_product_since:rel_midnight_ride
 	~doc:"Set the maximum number of VCPUs for a halted VM"
-	~params:[Ref _vm, "self", "The VM";
-		Int, "value", "The new maximum number of VCPUs"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+		Int, "value",  "The new maximum number of VCPUs"])
 	~allowed_roles:_R_VM_ADMIN
 	()
 
@@ -2120,8 +2149,8 @@ let vm_set_VCPUs_at_startup = call ~flags:[`Session]
 	~name:"set_VCPUs_at_startup"
 	~in_product_since:rel_midnight_ride
 	~doc:"Set the number of startup VCPUs for a halted VM"
-	~params:[Ref _vm, "self", "The VM";
-		Int, "value", "The new maximum number of VCPUs"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+		Int, "value",  "The new maximum number of VCPUs"])
 	~allowed_roles:_R_VM_ADMIN
 	()
 
@@ -2129,8 +2158,8 @@ let vm_set_HVM_shadow_multiplier = call ~flags:[`Session]
 	~name:"set_HVM_shadow_multiplier"
 	~in_product_since:rel_midnight_ride
 	~doc:"Set the shadow memory multiplier on a halted VM"
-	~params:[Ref _vm, "self", "The VM";
-		Float, "value", "The new shadow memory multiplier to set"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+		Float, "value",  "The new shadow memory multiplier to set"])
 	~allowed_roles:_R_VM_POWER_ADMIN
 	()
 
@@ -2138,8 +2167,8 @@ let vm_set_shadow_multiplier_live = call
 	~name:"set_shadow_multiplier_live"
 	~in_product_since:rel_rio
 	~doc:"Set the shadow memory multiplier on a running VM"
-	~params:[Ref _vm, "self", "The VM";
-		Float, "multiplier", "The new shadow memory multiplier to set"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+		Float, "multiplier",  "The new shadow memory multiplier to set"])
 	~allowed_roles:_R_VM_POWER_ADMIN
 	()
 
@@ -2147,9 +2176,9 @@ let vm_add_to_VCPUs_params_live = call
   ~name:"add_to_VCPUs_params_live"
   ~in_product_since:rel_rio
   ~doc:"Add the given key-value pair to VM.VCPUs_params, and apply that value on the running VM"
-  ~params:[Ref _vm, "self", "The VM";
-           String, "key", "The key";
-           String, "value", "The value"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+           String, "key",  "The key";
+           String, "value",  "The value"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -2157,8 +2186,8 @@ let vm_send_sysrq = call
   ~name:"send_sysrq"
   ~in_product_since:rel_rio
   ~doc:"Send the given key as a sysrq to this VM.  The key is specified as a single character (a String of length 1).  This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM";
-           String, "key", "The key to send"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM";
+           String, "key",  "The key to send"])
   ~errs:[Api_errors.vm_bad_power_state]
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -2167,8 +2196,8 @@ let vm_send_trigger = call
   ~name:"send_trigger"
   ~in_product_since:rel_rio
   ~doc:"Send the named trigger to this VM.  This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM";
-           String, "trigger", "The trigger to send"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM";
+           String, "trigger",  "The trigger to send"])
   ~errs:[Api_errors.vm_bad_power_state]
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -2176,13 +2205,19 @@ let vm_send_trigger = call
 let vm_migrate_send = call
   ~name: "migrate_send"
   ~in_product_since:rel_tampa
-  ~doc: "Migrate the VM to another host.  This can only be called when the specified VM is in the Running state."
-  ~params:[Ref _vm, "vm", "The VM";
-           Map(String,String), "dest", "The result of a Host.migrate_receive call.";
-           Bool, "live", "Live migration";
-		   Map (Ref _vdi, Ref _sr), "vdi_map", "Map of source VDI to destination SR";
-		   Map (Ref _vif, Ref _network), "vif_map", "Map of source VIF to destination network";
-           Map (String, String), "options", "Other parameters"]
+  ~doc:"Migrate the VM to another host.  This can only be called when the specified VM is in the Running state."
+  ~params:(make_params [Ref _vm, "vm",  "The VM";
+           Map(String,String), "dest",  "The result of a Host.migrate_receive call.";
+           Bool, "live",  "Live migration";
+		   Map (Ref _vdi, Ref _sr), "vdi_map",  "Map of source VDI to destination SR";
+		   Map (Ref _vif, Ref _network), "vif_map",  "Map of source VIF to destination network"] @ [
+           param
+             ~ty:(Map(String, String))
+             ~name:"options"
+             ~doc:"Extra configuration operations"
+             ~map_keys:["force", "Attempt to force the VM to migrate."]
+             ()
+           ])
   ~errs:[Api_errors.vm_bad_power_state]
   ~allowed_roles:_R_VM_POWER_ADMIN
   ()
@@ -2191,13 +2226,19 @@ let vm_assert_can_migrate = call
 ~name:"assert_can_migrate"
 	~in_product_since:rel_tampa
 	~doc:"Assert whether a VM can be migrated to the specified destination."
-	~params:[
-		Ref _vm, "vm", "The VM";
-		Map(String,String), "dest", "The result of a VM.migrate_receive call.";
-		Bool, "live", "Live migration";
-		Map (Ref _vdi, Ref _sr), "vdi_map", "Map of source VDI to destination SR";
-		Map (Ref _vif, Ref _network), "vif_map", "Map of source VIF to destination network";
-		Map (String, String), "options", "Other parameters" ]
+	~params:(make_params [
+		Ref _vm, "vm",  "The VM";
+		Map(String,String), "dest",  "The result of a VM.migrate_receive call.";
+		Bool, "live",  "Live migration";
+		Map (Ref _vdi, Ref _sr), "vdi_map",  "Map of source VDI to destination SR";
+		Map (Ref _vif, Ref _network), "vif_map",  "Map of source VIF to destination network"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"options"
+			~doc:"Extra configuration operations"
+			~map_keys:["force", "Attempt to force the VM to migrate."]
+			()
+		])
 	~allowed_roles:_R_VM_POWER_ADMIN
 	()
 
@@ -2205,7 +2246,7 @@ let vm_s3_suspend = call
   ~name: "s3_suspend"
   ~in_product_since:rel_midnight_ride
   ~doc:"Try to put the VM into ACPI S3 state"
-  ~params:[Ref _vm, "vm", "The VM"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM"])
   ~hide_from_docs:true
   ~allowed_roles:_R_VM_OP
   ()
@@ -2214,7 +2255,7 @@ let vm_s3_resume = call
   ~name: "s3_resume"
   ~in_product_since:rel_midnight_ride
   ~doc:"Try to resume the VM from ACPI S3 state"
-  ~params:[Ref _vm, "vm", "The VM"]
+  ~params:(make_params [Ref _vm, "vm",  "The VM"])
   ~hide_from_docs:true
   ~allowed_roles:_R_VM_OP
   ()
@@ -2224,11 +2265,11 @@ let vm_create_new_blob = call
   ~name: "create_new_blob"
   ~in_product_since:rel_orlando
   ~doc:"Create a placeholder for a named binary blob of data that is associated with this VM"
-  ~versioned_params:
-  [{param_type=Ref _vm; param_name="vm"; param_doc="The VM"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="name"; param_doc="The name associated with the blob"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="mime_type"; param_doc="The mime type for the data. Empty string translates to application/octet-stream"; param_release=orlando_release; param_default=None};
-  {param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}
+  ~params:
+  [param ~name:"vm" ~ty:(Ref _vm) ~doc:"The VM" ~release:orlando_release ?default:None ();
+  param ~name:"name" ~ty:(String) ~doc:"The name associated with the blob" ~release:orlando_release ?default:None ();
+  param ~name:"mime_type" ~ty:(String) ~doc:"The mime type for the data. Empty string translates to application/octet-stream" ~release:orlando_release ?default:None ();
+  param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()
   ]
   ~result:(Ref _blob, "The reference of the blob, needed for populating its data")
   ~allowed_roles:_R_VM_POWER_ADMIN
@@ -2238,8 +2279,8 @@ let vm_copy_bios_strings = call
   ~name: "copy_bios_strings"
   ~in_product_since:rel_midnight_ride
   ~doc:"Copy the BIOS strings from the given host to this VM"
-  ~params:[Ref _vm, "vm", "The VM to modify";
-	   Ref _host, "host", "The host to copy the BIOS strings from";]
+  ~params:(make_params [Ref _vm, "vm",  "The VM to modify";
+	   Ref _host, "host",  "The host to copy the BIOS strings from";])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -2248,8 +2289,8 @@ let vm_set_protection_policy = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Set the value of the protection_policy field"
-  ~params:[Ref _vm, "self", "The VM";
-     Ref _vmpp, "value", "The value"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+     Ref _vmpp, "value",  "The value"])
   ~flags:[`Session]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2258,8 +2299,8 @@ let vm_set_start_delay = call
   ~name:"set_start_delay"
   ~in_product_since:rel_boston
   ~doc:"Set this VM's start delay in seconds"
-  ~params:[Ref _vm, "self", "The VM";
-    Int, "value", "This VM's start delay in seconds"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+    Int, "value",  "This VM's start delay in seconds"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2267,8 +2308,8 @@ let vm_set_shutdown_delay = call
   ~name:"set_shutdown_delay"
   ~in_product_since:rel_boston
   ~doc:"Set this VM's shutdown delay in seconds"
-  ~params:[Ref _vm, "self", "The VM";
-    Int, "value", "This VM's shutdown delay in seconds"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+    Int, "value",  "This VM's shutdown delay in seconds"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2276,8 +2317,8 @@ let vm_set_order = call
   ~name:"set_order"
   ~in_product_since:rel_boston
   ~doc:"Set this VM's boot order"
-  ~params:[Ref _vm, "self", "The VM";
-    Int, "value", "This VM's boot order"]
+  ~params:(make_params [Ref _vm, "self",  "The VM";
+    Int, "value",  "This VM's boot order"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2285,8 +2326,8 @@ let vm_set_suspend_VDI = call
 	~name:"set_suspend_VDI"
 	~in_product_since:rel_boston
 	~doc:"Set this VM's suspend VDI, which must be indentical to its current one"
-	~params:[Ref _vm, "self", "The VM";
-	         Ref _vdi, "value", "The suspend VDI uuid"]
+	~params:(make_params [Ref _vm, "self",  "The VM";
+	         Ref _vdi, "value",  "The suspend VDI uuid"])
 	~allowed_roles:_R_POOL_OP
 	()
 	
@@ -2294,8 +2335,8 @@ let vm_assert_can_be_recovered = call
   ~name:"assert_can_be_recovered"
   ~in_product_since:rel_boston
   ~doc:"Assert whether all SRs required to recover this VM are available."
-  ~params:[Ref _vm, "self", "The VM to recover";
-    Ref _session, "session_to", "The session to which the VM is to be recovered."]
+  ~params:(make_params [Ref _vm, "self",  "The VM to recover";
+    Ref _session, "session_to",  "The session to which the VM is to be recovered."])
   ~errs:[Api_errors.vm_is_part_of_an_appliance; Api_errors.vm_requires_sr]
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -2304,8 +2345,8 @@ let vm_get_SRs_required_for_recovery = call
 	~name:"get_SRs_required_for_recovery"
 	~in_product_since:rel_creedence
 	~doc:"List all the SR's that are required for the VM to be recovered"
-	~params:[Ref _vm , "self" , "The VM for which the SRs have to be recovered";
-					Ref _session , "session_to" , "The session to which the SRs of the VM have to be recovered."]
+	~params:(make_params [Ref _vm , "self" ,  "The VM for which the SRs have to be recovered";
+					Ref _session , "session_to",  "The session to which the SRs of the VM have to be recovered."])
 	~result:(Set(Ref _sr),"refs for SRs required to recover the VM")
 	~errs:[]
 	~allowed_roles:_R_READ_ONLY
@@ -2315,9 +2356,9 @@ let vm_recover = call
   ~name:"recover"
   ~in_product_since:rel_boston
   ~doc:"Recover the VM"
-  ~params:[Ref _vm, "self", "The VM to recover";
-    Ref _session, "session_to", "The session to which the VM is to be recovered.";
-    Bool, "force", "Whether the VM should replace newer versions of itself."]
+  ~params:(make_params [Ref _vm, "self",  "The VM to recover";
+    Ref _session, "session_to",  "The session to which the VM is to be recovered.";
+    Bool, "force",  "Whether the VM should replace newer versions of itself."])
   ~allowed_roles:_R_READ_ONLY
   ()
 
@@ -2325,8 +2366,8 @@ let vm_set_appliance = call
 	~name:"set_appliance"
 	~in_product_since:rel_boston
 	~doc:"Assign this VM to an appliance."
-	~params:[Ref _vm, "self", "The VM to assign to an appliance.";
-		Ref _vm_appliance, "value", "The appliance to which this VM should be assigned."]
+	~params:(make_params [Ref _vm, "self",  "The VM to assign to an appliance.";
+		Ref _vm_appliance, "value",  "The appliance to which this VM should be assigned."])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -2338,7 +2379,7 @@ let host_ha_disable_failover_decisions = call
   ~in_product_since:rel_orlando
   ~name:"ha_disable_failover_decisions"
   ~doc:"Prevents future failover decisions happening on this node. This function should only be used as part of a controlled shutdown of the HA system."
-  ~params:[Ref _host, "host", "The Host to disable failover decisions for"]
+  ~params:(make_params [Ref _host, "host",  "The Host to disable failover decisions for"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2348,7 +2389,7 @@ let host_ha_disarm_fencing = call
   ~in_product_since:rel_orlando
   ~name:"ha_disarm_fencing"
   ~doc:"Disarms the fencing function of the HA subsystem. This function is extremely dangerous and should only be used as part of a controlled shutdown of the HA system."
-  ~params:[Ref _host, "host", "The Host to disarm"]
+  ~params:(make_params [Ref _host, "host",  "The Host to disarm"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2358,7 +2399,7 @@ let host_ha_stop_daemon = call
   ~in_product_since:rel_orlando
   ~name:"ha_stop_daemon"
   ~doc:"Stops the HA daemon. This function is extremely dangerous and should only be used as part of a controlled shutdown of the HA system."
-  ~params:[Ref _host, "host", "The Host whose daemon should be stopped"]
+  ~params:(make_params [Ref _host, "host",  "The Host whose daemon should be stopped"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2368,7 +2409,7 @@ let host_ha_release_resources = call
   ~in_product_since:rel_orlando
   ~name:"ha_release_resources"
   ~doc:"Cleans up any resources on the host associated with this HA instance."
-  ~params:[Ref _host, "host", "The Host whose resources should be cleaned up"]
+  ~params:(make_params [Ref _host, "host",  "The Host whose resources should be cleaned up"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2378,7 +2419,7 @@ let host_local_assert_healthy = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"local_assert_healthy"
   ~doc:"Returns nothing if this host is healthy, otherwise it throws an error explaining why the host is unhealthy"
-  ~params:[]
+  ~params:(make_params [])
   ~pool_internal:true
   ~hide_from_docs:true
   ~errs:[ Api_errors.host_still_booting;
@@ -2397,11 +2438,11 @@ let host_preconfigure_ha = call
   ~in_product_since:rel_miami
   ~name:"preconfigure_ha"  
   ~doc:"Attach statefiles, generate config files but do not start the xHA daemon."
-  ~params:[Ref _host, "host", "The Host to modify";
-	   Set(Ref _vdi), "statefiles", "Set of statefile VDIs to use";
-	   Ref _vdi, "metadata_vdi", "VDI to use for Pool metadata";
-	   String, "generation", "UUID identifying this HA instance";
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to modify";
+	   Set(Ref _vdi), "statefiles",  "Set of statefile VDIs to use";
+	   Ref _vdi, "metadata_vdi",  "VDI to use for Pool metadata";
+	   String, "generation",  "UUID identifying this HA instance";
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2411,7 +2452,7 @@ let host_ha_join_liveset = call
   ~in_product_since:rel_orlando
   ~name:"ha_join_liveset"
   ~doc:"Block until this host joins the liveset."
-  ~params:[Ref _host, "host", "The Host whose HA datmon to start"]
+  ~params:(make_params [Ref _host, "host",  "The Host whose HA datmon to start"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2421,7 +2462,7 @@ let host_ha_wait_for_shutdown_via_statefile = call
   ~in_product_since:rel_orlando
   ~name:"ha_wait_for_shutdown_via_statefile"
   ~doc:"Block until this host xHA daemon exits after having seen the invalid statefile. If the host loses statefile access then throw an exception"
-  ~params:[Ref _host, "host", "The Host whose HA subsystem to query"]
+  ~params:(make_params [Ref _host, "host",  "The Host whose HA subsystem to query"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2431,7 +2472,7 @@ let host_query_ha = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"query_ha"
   ~doc:"Return the local HA configuration as seen by this host"
-  ~params:[]
+  ~params:(make_params [])
   ~custom_marshaller:true  
   ~pool_internal:true
   ~hide_from_docs:true
@@ -2441,10 +2482,10 @@ let host_request_backup = call ~flags:[`Session]
   ~name:"request_backup"
   ~in_product_since:rel_rio
   ~doc:"Request this host performs a database backup"
-  ~params:[Ref _host, "host", "The Host to send the request to";
-	   Int, "generation", "The generation count of the master's database";
-	   Bool, "force", "If this is true then the client _has_ to take a backup, otherwise it's just an 'offer'"
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to send the request to";
+	   Int, "generation",  "The generation count of the master's database";
+	   Bool, "force",  "If this is true then the client _has_ to take a backup, otherwise it's just an 'offer'"
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2454,9 +2495,9 @@ let host_request_config_file_sync = call ~flags:[`Session]
   ~name:"request_config_file_sync"
   ~in_product_since:rel_rio
   ~doc:"Request this host syncs dom0 config files"
-  ~params:[Ref _host, "host", "The Host to send the request to";
-	   String, "hash", "The hash of the master's dom0 config files package"
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to send the request to";
+	   String, "hash",  "The hash of the master's dom0 config files package"
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2469,9 +2510,9 @@ let host_propose_new_master = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"propose_new_master"
   ~doc:"First phase of a two-phase commit protocol to set the new master. If the host has already committed to another configuration or if the proposed new master is not in this node's membership set then the call will return an exception."
-  ~params:[String, "address", "The address of the Host which is proposed as the new master";
-	   Bool, "manual", "True if this call is being invoked by the user manually, false if automatic";
-	  ]
+  ~params:(make_params [String, "address",  "The address of the Host which is proposed as the new master";
+	   Bool, "manual",  "True if this call is being invoked by the user manually, false if automatic";
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2481,7 +2522,7 @@ let host_abort_new_master = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"abort_new_master"
   ~doc:"Causes the new master transaction to abort"
-  ~params:[String, "address", "The address of the Host which is proposed as the new master"]
+  ~params:(make_params [String, "address",  "The address of the Host which is proposed as the new master"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2491,7 +2532,7 @@ let host_commit_new_master = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"commit_new_master"
   ~doc:"Second phase of a two-phase commit protocol to set the new master."
-  ~params:[String, "address", "The address of the Host which should be committed as the new master"]
+  ~params:(make_params [String, "address",  "The address of the Host which should be committed as the new master"])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2501,7 +2542,7 @@ let host_compute_free_memory = call
 	~in_product_since:rel_orlando
 	~name:"compute_free_memory"
 	~doc:"Computes the amount of free memory on the host."
-	~params:[Ref _host, "host", "The host to send the request to"]
+	~params:(make_params [Ref _host, "host",  "The host to send the request to"])
 	~pool_internal:false
 	~hide_from_docs:false
 	~result:(Int, "the amount of free memory on the host.")
@@ -2512,7 +2553,7 @@ let host_compute_memory_overhead = call
 	~in_product_since:rel_midnight_ride
 	~name:"compute_memory_overhead"
 	~doc:"Computes the virtualization memory overhead of a host."
-	~params:[Ref _host, "host", "The host for which to compute the memory overhead"]
+	~params:(make_params [Ref _host, "host",  "The host for which to compute the memory overhead"])
 	~pool_internal:false
 	~hide_from_docs:false
 	~result:(Int, "the virtualization memory overhead of the host.")
@@ -2524,7 +2565,7 @@ let host_is_in_emergency_mode = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"is_in_emergency_mode"
   ~doc:"Diagnostics call to discover if host is in emergency mode"
-  ~params:[]
+  ~params:(make_params [])
   ~pool_internal:false
   ~hide_from_docs:true
   ~result:(Bool, "true if host is in emergency mode")
@@ -2545,8 +2586,8 @@ let host_notify = call
   ~in_product_since:rel_miami
   ~name:"notify"
   ~doc:"Notify an event"
-  ~params:[String, "ty", "type of the notification";
-           String, "params", "arguments of the notification (can be empty)"; ]
+  ~params:(make_params [String, "ty",  "type of the notification";
+           String, "params",  "arguments of the notification (can be empty)"; ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2556,7 +2597,7 @@ let host_syslog_reconfigure = call
   ~in_product_since:rel_miami
   ~name:"syslog_reconfigure"
   ~doc:"Re-configure syslog logging"
-  ~params:[Ref _host, "host", "Tell the host to reread its Host.logging parameters and reconfigure itself accordingly"]
+  ~params:(make_params [Ref _host, "host",  "Tell the host to reread its Host.logging parameters and reconfigure itself accordingly"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2564,9 +2605,9 @@ let host_management_reconfigure = call
   ~in_product_since:rel_miami
   ~name:"management_reconfigure"
   ~doc:"Reconfigure the management network interface"
-  ~params:[
-    Ref _pif, "pif", "reference to a PIF object corresponding to the management interface";
-	  ]
+  ~params:(make_params [
+    Ref _pif, "pif",  "reference to a PIF object corresponding to the management interface";
+	  ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2574,9 +2615,9 @@ let host_local_management_reconfigure = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"local_management_reconfigure"
   ~doc:"Reconfigure the management network interface. Should only be used if Host.management_reconfigure is impossible because the network configuration is broken."
-  ~params:[
-    String, "interface", "name of the interface to use as a management interface";
-	  ]
+  ~params:(make_params [
+    String, "interface",  "name of the interface to use as a management interface";
+	  ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2593,7 +2634,7 @@ let host_management_disable = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"management_disable"
   ~doc:"Disable the management network interface"
-  ~params:[]
+  ~params:(make_params [])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2601,7 +2642,7 @@ let host_get_management_interface = call
   ~lifecycle:[Prototyped, rel_tampa, ""]
   ~name:"get_management_interface"
   ~doc:"Returns the management interface for the specified host"
-  ~params:[Ref _host, "host", "Which host's management interface is required"]
+  ~params:(make_params [Ref _host, "host",  "Which host's management interface is required"])
   ~result:(Ref _pif, "The management interface for the host")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2613,7 +2654,7 @@ let host_assert_can_evacuate = call
   ~in_product_since:rel_miami
   ~name:"assert_can_evacuate"
   ~doc:"Check this host can be evacuated."
-  ~params:[Ref _host, "host", "The host to evacuate"]
+  ~params:(make_params [Ref _host, "host",  "The host to evacuate"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2623,7 +2664,7 @@ let host_get_vms_which_prevent_evacuation = call
   ~in_product_since:rel_orlando
   ~name:"get_vms_which_prevent_evacuation"
   ~doc:"Return a set of VMs which prevent the host being evacuated, with per-VM error codes"
-  ~params:[Ref _host, "self", "The host to query"]
+  ~params:(make_params [Ref _host, "self",  "The host to query"])
   ~result:(Map(Ref _vm, Set(String)), "VMs which block evacuation together with reasons")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -2632,7 +2673,7 @@ let host_evacuate = call
   ~in_product_since:rel_miami
   ~name:"evacuate"
   ~doc:"Migrate all VMs off of this host, where possible."
-  ~params:[Ref _host, "host", "The host to evacuate"]
+  ~params:(make_params [Ref _host, "host",  "The host to evacuate"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2641,7 +2682,7 @@ let host_get_uncooperative_resident_VMs = call
 	~internal_deprecated_since:rel_tampa
 	~name:"get_uncooperative_resident_VMs"
 	~doc:"Return a set of VMs which are not co-operating with the host's memory control system"
-	~params:[Ref _host, "self", "The host to query"]
+	~params:(make_params [Ref _host, "self",  "The host to query"])
 	~result:((Set(Ref _vm)), "VMs which are not co-operating")
 	~allowed_roles:_R_READ_ONLY
 	()
@@ -2651,7 +2692,7 @@ let host_get_uncooperative_domains = call
 	~internal_deprecated_since:rel_tampa
 	~name:"get_uncooperative_domains"
 	~doc:"Return the set of domain uuids which are not co-operating with the host's memory control system"
-	~params:[Ref _host, "self", "The host to query"]
+	~params:(make_params [Ref _host, "self",  "The host to query"])
 	~result:((Set(String)), "UUIDs of domains which are not co-operating")
 	~pool_internal:true
 	~hide_from_docs:true
@@ -2662,7 +2703,7 @@ let host_retrieve_wlb_evacuate_recommendations = call
   ~name:"retrieve_wlb_evacuate_recommendations"
   ~in_product_since:rel_george
   ~doc:"Retrieves recommended host migrations to perform when evacuating the host from the wlb server. If a VM cannot be migrated from the host the reason is listed instead of a recommendation."
-  ~params:[Ref _host, "self", "The host to query"]
+  ~params:(make_params [Ref _host, "self",  "The host to query"])
   ~result:(Map(Ref _vm, Set(String)), "VMs and the reasons why they would block evacuation, or their target host recommended by the wlb server")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -2673,7 +2714,7 @@ let host_disable = call
   ~in_product_since:rel_rio
   ~name:"disable"
   ~doc:"Puts the host into a state in which no new VMs can be started. Currently active VMs on the host continue to execute."
-  ~params:[Ref _host, "host", "The Host to disable"]
+  ~params:(make_params [Ref _host, "host",  "The Host to disable"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2683,7 +2724,7 @@ let host_enable = call
   ~name:"enable"
   ~in_product_since:rel_rio
   ~doc:"Puts the host into a state in which new VMs can be started."
-  ~params:[Ref _host, "host", "The Host to enable"]
+  ~params:(make_params [Ref _host, "host",  "The Host to enable"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2693,7 +2734,7 @@ let host_shutdown = call
   ~name:"shutdown"
   ~in_product_since:rel_rio
   ~doc:"Shutdown the host. (This function can only be called if there are no currently running VMs on the host and it is disabled.)"
-  ~params:[Ref _host, "host", "The Host to shutdown"]
+  ~params:(make_params [Ref _host, "host",  "The Host to shutdown"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2703,7 +2744,7 @@ let host_reboot = call
   ~name:"reboot"
   ~in_product_since:rel_rio
   ~doc:"Reboot the host. (This function can only be called if there are no currently running VMs on the host and it is disabled.)"
-  ~params:[Ref _host, "host", "The Host to reboot"]
+  ~params:(make_params [Ref _host, "host",  "The Host to reboot"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2713,7 +2754,7 @@ let host_power_on = call
   ~name:"power_on"
   ~in_product_since:rel_orlando
   ~doc:"Attempt to power-on the host (if the capability exists)."
-  ~params:[Ref _host, "host", "The Host to power on"]
+  ~params:(make_params [Ref _host, "host",  "The Host to power on"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2721,7 +2762,7 @@ let host_restart_agent = call
   ~name:"restart_agent"
   ~in_product_since:rel_rio
   ~doc:"Restarts the agent after a 10 second pause. WARNING: this is a dangerous operation. Any operations in progress will be aborted, and unrecoverable data loss may occur. The caller is responsible for ensuring that there are no operations in progress when this method is called."
-  ~params:[Ref _host, "host", "The Host on which you want to restart the agent"]
+  ~params:(make_params [Ref _host, "host",  "The Host on which you want to restart the agent"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2729,7 +2770,7 @@ let host_shutdown_agent = call
   ~name:"shutdown_agent"
   ~in_product_since:rel_orlando
   ~doc:"Shuts the agent down after a 10 second pause. WARNING: this is a dangerous operation. Any operations in progress will be aborted, and unrecoverable data loss may occur. The caller is responsible for ensuring that there are no operations in progress when this method is called."
-  ~params:[]
+  ~params:(make_params [])
   ~flags:[`Session] (* no async *)
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2738,7 +2779,7 @@ let host_dmesg = call
   ~name:"dmesg"
   ~in_product_since:rel_rio
   ~doc:"Get the host xen dmesg."
-  ~params:[Ref _host, "host", "The Host to query"]
+  ~params:(make_params [Ref _host, "host",  "The Host to query"])
   ~result:(String, "dmesg string")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2747,7 +2788,7 @@ let host_dmesg_clear = call
   ~name:"dmesg_clear"
   ~in_product_since:rel_rio
   ~doc:"Get the host xen dmesg, and clear the buffer."
-  ~params:[Ref _host, "host", "The Host to query"]
+  ~params:(make_params [Ref _host, "host",  "The Host to query"])
   ~result:(String, "dmesg string")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2756,7 +2797,7 @@ let host_get_log = call
   ~name:"get_log"
   ~in_product_since:rel_rio
   ~doc:"Get the host's log file"
-  ~params:[Ref _host, "host", "The Host to query"]
+  ~params:(make_params [Ref _host, "host",  "The Host to query"])
   ~result:(String, "The contents of the host's primary log file")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -2765,8 +2806,8 @@ let host_send_debug_keys = call
   ~name:"send_debug_keys"
   ~in_product_since:rel_rio
   ~doc:"Inject the given string as debugging keys into Xen"
-  ~params:[Ref _host, "host", "The host";
-           String, "keys", "The keys to send"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+           String, "keys",  "The keys to send"])
   ~allowed_roles:_R_POOL_ADMIN
   ()
 
@@ -2776,7 +2817,7 @@ let host_get_data_sources = call
   ~in_product_since:rel_orlando
   ~doc:""
   ~result:(Set (Record _data_source), "A set of data sources")
-  ~params:[Ref _host, "host", "The host to interrogate"]
+  ~params:(make_params [Ref _host, "host",  "The host to interrogate"])
   ~errs:[]
   ~flags:[`Session] 
   ~allowed_roles:_R_READ_ONLY
@@ -2787,8 +2828,8 @@ let host_record_data_source = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Start recording the specified data source"
-  ~params:[Ref _host, "host", "The host";
-	   String, "data_source", "The data source to record"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+	   String, "data_source",  "The data source to record"])
   ~errs:[]
   ~flags:[`Session]
   ~allowed_roles:_R_POOL_OP
@@ -2799,8 +2840,8 @@ let host_query_data_source = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Query the latest value of the specified data source"
-  ~params:[Ref _host, "host", "The host";
-	   String, "data_source", "The data source to query"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+	   String, "data_source",  "The data source to query"])
   ~result:(Float,"The latest value, averaged over the last 5 seconds")
   ~errs:[]
   ~flags:[`Session]
@@ -2811,9 +2852,9 @@ let host_attach_static_vdis = call
   ~name:"attach_static_vdis"
 	~in_product_since:rel_midnight_ride
   ~doc:"Statically attach VDIs on a host."
-  ~params:[Ref _host, "host", "The Host to modify";
-    Map(Ref _vdi, String), "vdi_reason_map", "List of VDI+reason pairs to attach"
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to modify";
+    Map(Ref _vdi, String), "vdi_reason_map",  "List of VDI+reason pairs to attach"
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2823,9 +2864,9 @@ let host_detach_static_vdis = call
   ~name:"detach_static_vdis"
 	~in_product_since:rel_midnight_ride
   ~doc:"Detach static VDIs from a host."
-  ~params:[Ref _host, "host", "The Host to modify";
-	   Set(Ref _vdi), "vdis", "Set of VDIs to detach";
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to modify";
+	   Set(Ref _vdi), "vdis",  "Set of VDIs to detach";
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2835,7 +2876,7 @@ let host_declare_dead = call
   ~name:"declare_dead"
 	~in_product_since:rel_clearwater
   ~doc:"Declare that a host is dead. This is a dangerous operation, and should only be called if the administrator is absolutely sure the host is definitely dead"
-  ~params:[Ref _host, "host", "The Host to declare is dead"]
+  ~params:(make_params [Ref _host, "host",  "The Host to declare is dead"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -2844,8 +2885,8 @@ let host_forget_data_source_archives = call
   ~in_oss_since:None
   ~in_product_since:rel_orlando
   ~doc:"Forget the recorded statistics related to the specified data source"
-  ~params:[Ref _host, "host", "The host";
-	   String, "data_source", "The data source whose archives are to be forgotten"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+	   String, "data_source",  "The data source whose archives are to be forgotten"])
   ~flags:[`Session]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2854,7 +2895,7 @@ let host_get_diagnostic_timing_stats = call ~flags:[`Session]
   ~in_product_since:rel_miami
   ~name:"get_diagnostic_timing_stats"
   ~doc:"Return timing statistics for diagnostic purposes"
-  ~params:[Ref _host, "host", "The host to interrogate"]
+  ~params:(make_params [Ref _host, "host",  "The host to interrogate"])
   ~result:(Map(String, String), "population name to summary map")
   ~hide_from_docs:true
   ~allowed_roles:_R_READ_ONLY
@@ -2864,11 +2905,11 @@ let host_create_new_blob = call
   ~name: "create_new_blob"
   ~in_product_since:rel_orlando
   ~doc:"Create a placeholder for a named binary blob of data that is associated with this host"
-  ~versioned_params:
-  [{param_type=Ref _host; param_name="host"; param_doc="The host"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="name"; param_doc="The name associated with the blob"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="mime_type"; param_doc="The mime type for the data. Empty string translates to application/octet-stream"; param_release=orlando_release; param_default=None};
-  {param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}]
+  ~params:
+  [param ~name:"host" ~ty:(Ref _host) ~doc:"The host" ~release:orlando_release ?default:None ();
+  param ~name:"name" ~ty:(String) ~doc:"The name associated with the blob" ~release:orlando_release ?default:None ();
+  param ~name:"mime_type" ~ty:(String) ~doc:"The mime type for the data. Empty string translates to application/octet-stream" ~release:orlando_release ?default:None ();
+  param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()]
   ~result:(Ref _blob, "The reference of the blob, needed for populating its data")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -2877,10 +2918,10 @@ let host_call_plugin = call
   ~name:"call_plugin"
   ~in_product_since:rel_orlando
   ~doc:"Call a XenAPI plugin on this host"
-  ~params:[Ref _host, "host", "The host";
-	   String, "plugin", "The name of the plugin";
-	   String, "fn", "The name of the function within the plugin";
-	   Map(String, String), "args", "Arguments for the function";]
+  ~params:(make_params [Ref _host, "host",  "The host";
+	   String, "plugin",  "The name of the plugin";
+	   String, "fn",  "The name of the function within the plugin";
+	   Map(String, String), "args",  "Arguments for the function";])
   ~result:(String, "Result from the plugin")
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -2891,7 +2932,7 @@ let host_enable_binary_storage = call
   ~hide_from_docs:true
   ~pool_internal:true
   ~doc:"Enable binary storage on a particular host, for storing RRDs, messages and blobs"
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -2901,7 +2942,7 @@ let host_disable_binary_storage = call
   ~hide_from_docs:true
   ~pool_internal:true
   ~doc:"Disable binary storage on a particular host, deleting stored RRDs, messages and blobs"
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -2911,9 +2952,9 @@ let host_update_pool_secret = call
 	~hide_from_docs:true
 	~pool_internal:true
 	~doc:""
-	~params:[
-		Ref _host, "host", "The host";
-		String, "pool_secret", "The new pool secret" ]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+		String, "pool_secret",  "The new pool secret" ])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
 	()
 
@@ -2923,9 +2964,9 @@ let host_update_master = call
 	~hide_from_docs:true
 	~pool_internal:true
 	~doc:""
-	~params:[
-		Ref _host, "host", "The host";
-		String, "master_address", "The new master address" ]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+		String, "master_address",  "The new master address" ])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
 	()
 
@@ -2933,10 +2974,10 @@ let host_set_localdb_key = call
   ~name:"set_localdb_key"
   ~in_product_since:rel_midnight_ride
   ~doc:"Set a key in the local DB of the host."
-  ~params:[Ref _host, "host", "The Host to modify";
-    String, "key", "Key to change";
-    String, "value", "Value to set"
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The Host to modify";
+    String, "key",  "Key to change";
+    String, "value",  "Value to set"
+	  ])
   ~pool_internal:true
   ~hide_from_docs:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -2946,7 +2987,7 @@ let host_refresh_pack_info = call
   ~name:"refresh_pack_info"
   ~in_product_since:rel_midnight_ride
   ~doc:"Refresh the list of installed Supplemental Packs."
-  ~params:[Ref _host, "host", "The Host to modify"]
+  ~params:(make_params [Ref _host, "host",  "The Host to modify"])
   ~allowed_roles:_R_POOL_OP
   () 
     
@@ -2960,9 +3001,9 @@ let vdi_snapshot = call
   ~name:"snapshot"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:
-  [{param_type=Ref _vdi; param_name="vdi"; param_doc="The VDI to snapshot"; param_release=rio_release; param_default=None};
-   {param_type=Map (String, String); param_name="driver_params"; param_doc="Optional parameters that can be passed through to backend driver in order to specify storage-type-specific snapshot options"; param_release=miami_release; param_default=Some (VMap [])}
+  ~params:
+  [param ~name:"vdi" ~ty:(Ref _vdi) ~doc:"The VDI to snapshot" ~release:rio_release ?default:None ();
+   param ~name:"driver_params" ~ty:(Map (String, String)) ~doc:"Optional parameters that can be passed through to backend driver in order to specify storage-type-specific snapshot options" ~release:miami_release ?default:(Some (VMap [])) ()
   ]
   ~doc:"Take a read-only snapshot of the VDI, returning a reference to the snapshot. If any driver_params are specified then these are passed through to the storage-specific substrate driver that takes the snapshot. NB the snapshot lives in the same Storage Repository as its parent."
   ~result:(Ref _vdi, "The ID of the newly created VDI.")
@@ -2973,10 +3014,9 @@ let vdi_clone = call
   ~name:"clone"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[Ref _vdi, "vdi", "The VDI to clone"]
-  ~versioned_params:
-  [{param_type=Ref _vdi; param_name="vdi"; param_doc="The VDI to clone"; param_release=rio_release; param_default=None};
-   {param_type=Map (String, String); param_name="driver_params"; param_doc="Optional parameters that are passed through to the backend driver in order to specify storage-type-specific clone options"; param_release=miami_release; param_default=Some (VMap [])}
+  ~params:
+  [param ~name:"vdi" ~ty:(Ref _vdi) ~doc:"The VDI to clone" ~release:rio_release ?default:None ();
+   param ~name:"driver_params" ~ty:(Map (String, String)) ~doc:"Optional parameters that are passed through to the backend driver in order to specify storage-type-specific clone options" ~release:miami_release ?default:(Some (VMap [])) ()
   ]
   ~doc:"Take an exact copy of the VDI and return a reference to the new disk. If any driver_params are specified then these are passed through to the storage-specific substrate driver that implements the clone operation. NB the clone lives in the same Storage Repository as its parent."
   ~result:(Ref _vdi, "The ID of the newly created VDI.")
@@ -2987,7 +3027,7 @@ let vdi_resize = call
   ~name:"resize"
   ~in_product_since:rel_rio
   ~in_oss_since:None
-  ~params:[Ref _vdi, "vdi", "The VDI to resize"; Int, "size", "The new size of the VDI" ]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI to resize"; Int, "size",  "The new size of the VDI" ])
   ~doc:"Resize the VDI."
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -2996,7 +3036,7 @@ let vdi_resize_online = call
   ~name:"resize_online"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[Ref _vdi, "vdi", "The VDI to resize"; Int, "size", "The new size of the VDI" ]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI to resize"; Int, "size",  "The new size of the VDI" ])
   ~doc:"Resize the VDI which may or may not be attached to running guests."
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -3008,11 +3048,11 @@ let vdi_copy = call
 	Extended, rel_cowley, "The copy can now be performed between any two SRs.";
 	Extended, rel_clearwater_felton, "The copy can now be performed into a pre-created VDI. It is now possible to request copying only changed blocks from a base VDI"; ]
   ~in_oss_since:None
-  ~versioned_params:
-  [{param_type=Ref _vdi; param_name="vdi"; param_doc="The VDI to copy"; param_release=rio_release; param_default=None};
-   {param_type=Ref _sr; param_name="sr"; param_doc="The destination SR (only required if the destination VDI is not specified"; param_release=rio_release; param_default=Some (VString Ref.(string_of null))};
-   {param_type=Ref _vdi; param_name="base_vdi"; param_doc="The base VDI (only required if copying only changed blocks, by default all blocks will be copied)"; param_release=clearwater_felton_release; param_default=Some (VRef Ref.(string_of null))};
-   {param_type=Ref _vdi; param_name="into_vdi"; param_doc="The destination VDI to copy blocks into (if omitted then a destination SR must be provided and a fresh VDI will be created)"; param_release=clearwater_felton_release; param_default=Some (VString Ref.(string_of null))};
+  ~params:
+  [param ~name:"vdi" ~ty:(Ref _vdi) ~doc:"The VDI to copy" ~release:rio_release ?default:None ();
+   param ~name:"sr" ~ty:(Ref _sr) ~doc:"The destination SR (only required if the destination VDI is not specified" ~release:rio_release ?default:(Some (VString Ref.(string_of null))) ();
+   param ~name:"base_vdi" ~ty:(Ref _vdi) ~doc:"The base VDI (only required if copying only changed blocks, by default all blocks will be copied)" ~release:clearwater_felton_release ?default:(Some (VRef Ref.(string_of null))) ();
+   param ~name:"into_vdi" ~ty:(Ref _vdi) ~doc:"The destination VDI to copy blocks into (if omitted then a destination SR must be provided and a fresh VDI will be created)" ~release:clearwater_felton_release ?default:(Some (VString Ref.(string_of null))) ();
   ]
   ~doc:"Copy either a full VDI or the block differences between two VDIs into either a fresh VDI or an existing VDI."
   ~errs:[Api_errors.vdi_readonly; Api_errors.vdi_too_small; Api_errors.vdi_not_sparse]
@@ -3024,9 +3064,15 @@ let vdi_pool_migrate = call
   ~name:"pool_migrate"
   ~in_oss_since:None
   ~in_product_since:rel_tampa
-  ~params:[ Ref _vdi, "vdi", "The VDI to migrate"
-    ; Ref _sr, "sr", "The destination SR"
-    ; Map (String, String), "options", "Other parameters" ]
+  ~params:(make_params [ Ref _vdi, "vdi",  "The VDI to migrate";
+		Ref _sr, "sr",  "The destination SR"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"options"
+			~doc:"Extra configuration operations"
+			~map_keys:["force", "Attempt to force the VM to migrate."]
+			()
+		])
   ~result:(Ref _vdi, "The new reference of the migrated VDI.")
   ~doc:"Migrate a VDI, which may be attached to a running guest, to a different SR. The destination SR must be visible to the guest."
   ~allowed_roles:_R_VM_POWER_ADMIN
@@ -3040,7 +3086,7 @@ let vbd_eject = call
   ~name:"eject"
   ~in_product_since:rel_rio
   ~doc:"Remove the media from the device and leave it empty"
-  ~params:[Ref _vbd, "vbd", "The vbd representing the CDROM-like device"]
+  ~params:(make_params [Ref _vbd, "vbd",  "The vbd representing the CDROM-like device"])
   ~errs:[Api_errors.vbd_not_removable_media; Api_errors.vbd_is_empty]
   ~allowed_roles:_R_VM_OP
   ()
@@ -3049,8 +3095,8 @@ let vbd_insert = call
   ~name:"insert"
   ~in_product_since:rel_rio
   ~doc:"Insert new media into the device"
-  ~params:[Ref _vbd, "vbd", "The vbd representing the CDROM-like device";
-	   Ref _vdi, "vdi", "The new VDI to 'insert'"]
+  ~params:(make_params [Ref _vbd, "vbd",  "The vbd representing the CDROM-like device";
+	   Ref _vdi, "vdi",  "The new VDI to 'insert'"])
   ~errs:[Api_errors.vbd_not_removable_media; Api_errors.vbd_not_empty]
   ~allowed_roles:_R_VM_OP
   ()
@@ -3059,7 +3105,7 @@ let vbd_plug = call
   ~name:"plug"
   ~in_product_since:rel_rio
   ~doc:"Hotplug the specified VBD, dynamically attaching it to the running VM"
-  ~params:[Ref _vbd, "self", "The VBD to hotplug"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to hotplug"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -3067,7 +3113,7 @@ let vbd_unplug = call
   ~name:"unplug"
   ~in_product_since:rel_rio
   ~doc:"Hot-unplug the specified VBD, dynamically unattaching it from the running VM"
-  ~params:[Ref _vbd, "self", "The VBD to hot-unplug"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to hot-unplug"])
   ~errs:[Api_errors.device_detach_rejected; Api_errors.device_already_detached]
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -3076,14 +3122,14 @@ let vbd_unplug_force = call
   ~name:"unplug_force"
   ~in_product_since:rel_rio
   ~doc:"Forcibly unplug the specified VBD"
-  ~params:[Ref _vbd, "self", "The VBD to forcibly unplug"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to forcibly unplug"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
 let vbd_unplug_force_no_safety_check = call
   ~name:"unplug_force_no_safety_check"
   ~doc:"Forcibly unplug the specified VBD without any safety checks. This is an extremely dangerous operation in the general case that can cause guest crashes and data corruption; it should be called with extreme caution."
-  ~params:[Ref _vbd, "self", "The VBD to forcibly unplug (no safety checks are applied to test if the device supports surprise-remove)"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to forcibly unplug (no safety checks are applied to test if the device supports surprise-remove)"])
   ~hide_from_docs:true
   ~in_product_since:rel_symc
   ~allowed_roles:_R_VM_ADMIN
@@ -3092,7 +3138,7 @@ let vbd_unplug_force_no_safety_check = call
 let vbd_pause = call
   ~name:"pause"
   ~doc:"Stop the backend device servicing requests so that an operation can be performed on the disk (eg live resize, snapshot)"
-  ~params:[Ref _vbd, "self", "The VBD to pause"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to pause"])
   ~hide_from_docs:true
   ~in_product_since:rel_symc
   ~result:(String, "Token to uniquely identify this pause instance, used to match the corresponding unpause") (* new in MR *)
@@ -3102,9 +3148,9 @@ let vbd_pause = call
 let vbd_unpause = call
   ~name:"unpause"
   ~doc:"Restart the backend device after it was paused while an operation was performed on the disk (eg live resize, snapshot)"
-  ~versioned_params:
-  [{param_type=Ref _vbd; param_name="self"; param_doc="The VBD to unpause"; param_release=miami_symc_release; param_default=None};
-   {param_type=String; param_name="token"; param_doc="The token from VBD.pause"; param_release=orlando_release; param_default=Some(VString "")}]
+  ~params:
+  [param ~name:"self" ~ty:(Ref _vbd) ~doc:"The VBD to unpause" ~release:miami_symc_release ?default:None ();
+   param ~name:"token" ~ty:(String) ~doc:"The token from VBD.pause" ~release:orlando_release ?default:(Some (VString "")) ()]
   ~hide_from_docs:true
   ~in_product_since:rel_symc
   ~allowed_roles:_R_VM_ADMIN
@@ -3114,7 +3160,7 @@ let vbd_assert_attachable = call
   ~name:"assert_attachable"
   ~in_product_since:rel_rio
   ~doc:"Throws an error if this VBD could not be attached to this VM if the VM were running. Intended for debugging."
-  ~params:[Ref _vbd, "self", "The VBD to query"]
+  ~params:(make_params [Ref _vbd, "self",  "The VBD to query"])
   ~in_oss_since:None
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -3261,34 +3307,34 @@ let create_obj ?lifecycle ~in_oss_since ?in_product_since ?(internal_deprecated_
 
 (** Additional messages for srs *)
 let dev_config_param =
-  {param_type=Map(String,String); param_name="device_config"; param_doc="The device config string that will be passed to backend SR driver"; param_release=rio_release; param_default=None}
+  param ~name:"device_config" ~ty:(Map(String,String)) ~doc:"The device config string that will be passed to backend SR driver" ~release:rio_release ?default:None ()
 
 let sr_host_param =
-  {param_type=Ref _host; param_name="host"; param_doc="The host to create/make the SR on"; param_release=rio_release; param_default=None}
+  param ~name:"host" ~ty:(Ref _host) ~doc:"The host to create/make the SR on" ~release:rio_release ?default:None ()
 
 let sr_physical_size_param =
-  {param_type=Int; param_name="physical_size"; param_doc="The physical size of the new storage repository"; param_release=rio_release; param_default=None}
+  param ~name:"physical_size" ~ty:(Int) ~doc:"The physical size of the new storage repository" ~release:rio_release ?default:None ()
 
 let sr_shared_param =
-  {param_type=Bool; param_name="shared"; param_doc="True if the SR (is capable of) being shared by multiple hosts"; param_release=rio_release; param_default=None}
+  param ~name:"shared" ~ty:(Bool) ~doc:"True if the SR (is capable of) being shared by multiple hosts" ~release:rio_release ?default:None ()
 
 let sr_create_common =
   [
-    {param_type=String; param_name="name_label"; param_doc="The name of the new storage repository"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="name_description"; param_doc="The description of the new storage repository"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="type"; param_doc="The type of the SR; used to specify the SR backend driver to use"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="content_type"; param_doc="The type of the new SRs content, if required (e.g. ISOs)"; param_release=rio_release; param_default=None};
+    param ~name:"name_label" ~ty:(String) ~doc:"The name of the new storage repository" ~release:rio_release ?default:None ();
+    param ~name:"name_description" ~ty:(String) ~doc:"The description of the new storage repository" ~release:rio_release ?default:None ();
+    param ~name:"type" ~ty:(String) ~doc:"The type of the SR; used to specify the SR backend driver to use" ~release:rio_release ?default:None ();
+    param ~name:"content_type" ~ty:(String) ~doc:"The type of the new SRs content, if required (e.g. ISOs)" ~release:rio_release ?default:None ();
   ]
 
 let sr_sm_config = 
-  {param_type=Map(String,String); param_name="sm_config"; param_doc="Storage backend specific configuration options"; param_release=miami_release; param_default=Some (VMap [])}
+  param ~name:"sm_config" ~ty:(Map(String,String)) ~doc:"Storage backend specific configuration options" ~release:miami_release ?default:(Some (VMap [])) ()
 
 
 let sr_create = call
   ~name:"create"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:(sr_host_param::dev_config_param::sr_physical_size_param::(sr_create_common @  [ sr_shared_param; sr_sm_config ] ))
+  ~params:(sr_host_param::dev_config_param::sr_physical_size_param::(sr_create_common @  [ sr_shared_param; sr_sm_config ] ))
   ~doc:"Create a new Storage Repository and introduce it into the managed system, creating both SR record and PBD record to attach it to current host (with specified device_config parameters)"
   ~result:(Ref _sr, "The reference of the newly created Storage Repository.")
   ~errs:[Api_errors.sr_unknown_driver]
@@ -3296,7 +3342,7 @@ let sr_create = call
     ()
 
 let destroy_self_param =
-  (Ref _sr, "sr", "The SR to destroy")
+  (Ref _sr, "sr",  "The SR to destroy")
 
 let sr_destroy = call
   ~name:"destroy"
@@ -3304,7 +3350,7 @@ let sr_destroy = call
   ~in_product_since:rel_rio
   ~doc:"Destroy specified SR, removing SR-record from database and remove SR from disk. (In order to affect this operation the appropriate device_config is read from the specified SR's PBD on current host)"
   ~errs:[Api_errors.sr_has_pbd]
-  ~params:[destroy_self_param]
+  ~params:(make_params [destroy_self_param])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3313,7 +3359,7 @@ let sr_forget = call
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~doc:"Removing specified SR-record from database, without attempting to remove SR from disk"
-  ~params:[destroy_self_param]
+  ~params:(make_params [destroy_self_param])
   ~errs:[Api_errors.sr_has_pbd]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3323,7 +3369,7 @@ let sr_introduce =
   ~name:"introduce"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:({param_type=String; param_name="uuid"; param_doc="The uuid assigned to the introduced SR"; param_release=rio_release; param_default=None}::(sr_create_common @ [sr_shared_param; sr_sm_config]))
+  ~params:(param ~name:"uuid" ~ty:(String) ~doc:"The uuid assigned to the introduced SR" ~release:rio_release ?default:None ()::(sr_create_common @ [sr_shared_param; sr_sm_config]))
   ~doc:"Introduce a new Storage Repository into the managed system"
   ~result:(Ref _sr, "The reference of the newly introduced Storage Repository.")
   ~allowed_roles:_R_POOL_OP
@@ -3333,7 +3379,7 @@ let sr_probe = call
   ~name:"probe"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~versioned_params:[sr_host_param; dev_config_param; {param_type=String; param_name="type"; param_doc="The type of the SR; used to specify the SR backend driver to use"; param_release=miami_release; param_default=None}; sr_sm_config]
+  ~params:[sr_host_param; dev_config_param; param ~name:"type" ~ty:(String) ~doc:"The type of the SR; used to specify the SR backend driver to use" ~release:miami_release ?default:None (); sr_sm_config]
   ~doc:"Perform a backend-specific scan, using the given device_config.  If the device_config is complete, then this will return a list of the SRs present of this type on the device, if any.  If the device_config is partial, then a backend-specific scan will be performed, returning results that will guide the user in improving the device_config."
   ~result:(String, "An XML fragment containing the scan results.  These are specific to the scan being performed, and the backend.")
   ~allowed_roles:_R_POOL_OP
@@ -3348,7 +3394,7 @@ let sr_make = call
     Published, rel_rio, "Create a new Storage Repository on disk";
     Deprecated, rel_miami, "Use SR.create instead"
   ]
-  ~versioned_params:(sr_host_param::dev_config_param::sr_physical_size_param::(sr_create_common @ [sr_sm_config]))
+  ~params:(sr_host_param::dev_config_param::sr_physical_size_param::(sr_create_common @ [sr_sm_config]))
   ~doc:"Create a new Storage Repository on disk. This call is deprecated: use SR.create instead."
   ~result:(String, "The uuid of the newly created Storage Repository.")
   ~allowed_roles:_R_POOL_OP
@@ -3359,7 +3405,7 @@ let sr_get_supported_types = call
   ~in_product_since:rel_rio
   ~flags:[`Session]
   ~doc:"Return a set of all the SR types supported by the system"
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Set String, "the supported SR types")
   ~allowed_roles:_R_READ_ONLY
 ()
@@ -3368,7 +3414,7 @@ let sr_scan = call
   ~name:"scan"
   ~in_product_since:rel_rio
   ~doc:"Refreshes the list of VDIs associated with an SR"
-  ~params:[Ref _sr, "sr", "The SR to scan" ]
+  ~params:(make_params [Ref _sr, "sr",  "The SR to scan" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3377,8 +3423,8 @@ let sr_set_shared = call
   ~name:"set_shared"
   ~in_product_since:rel_rio
   ~doc:"Sets the shared flag on the SR"
-  ~params:[Ref _sr, "sr", "The SR";
-	   Bool, "value", "True if the SR is shared"]
+  ~params:(make_params [Ref _sr, "sr",  "The SR";
+	   Bool, "value",  "True if the SR is shared"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3386,8 +3432,8 @@ let sr_set_name_label = call
 	~name:"set_name_label"
 	~in_product_since:rel_rio
 	~doc:"Set the name label of the SR"
-	~params:[Ref _sr, "sr", "The SR";
-	         String, "value", "The name label for the SR"]
+	~params:(make_params [Ref _sr, "sr",  "The SR";
+	         String, "value",  "The name label for the SR"])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -3395,8 +3441,8 @@ let sr_set_name_description = call
 	~name:"set_name_description"
 	~in_product_since:rel_rio
 	~doc:"Set the name description of the SR"
-	~params:[Ref _sr, "sr", "The SR";
-	         String, "value", "The name description for the SR"]
+	~params:(make_params [Ref _sr, "sr",  "The SR";
+	         String, "value",  "The name description for the SR"])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -3404,11 +3450,11 @@ let sr_create_new_blob = call
   ~name: "create_new_blob"
   ~in_product_since:rel_orlando
   ~doc:"Create a placeholder for a named binary blob of data that is associated with this SR"
-  ~versioned_params:
-  [{param_type=Ref _sr; param_name="sr"; param_doc="The SR"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="name"; param_doc="The name associated with the blob"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="mime_type"; param_doc="The mime type for the data. Empty string translates to application/octet-stream"; param_release=orlando_release; param_default=None};
-  {param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}
+  ~params:
+  [param ~name:"sr" ~ty:(Ref _sr) ~doc:"The SR" ~release:orlando_release ?default:None ();
+  param ~name:"name" ~ty:(String) ~doc:"The name associated with the blob" ~release:orlando_release ?default:None ();
+  param ~name:"mime_type" ~ty:(String) ~doc:"The mime type for the data. Empty string translates to application/octet-stream" ~release:orlando_release ?default:None ();
+  param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()
   ]
   ~result:(Ref _blob, "The reference of the blob, needed for populating its data")
   ~allowed_roles:_R_POOL_OP
@@ -3419,7 +3465,7 @@ let pbd_plug = call
   ~in_oss_since:None 
   ~in_product_since:rel_rio
   ~doc:"Activate the specified PBD, causing the referenced SR to be attached and scanned"
-  ~params:[Ref _pbd, "self", "The PBD to activate"]
+  ~params:(make_params [Ref _pbd, "self",  "The PBD to activate"])
   ~errs:[Api_errors.sr_unknown_driver]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3429,7 +3475,7 @@ let pbd_unplug = call
   ~in_oss_since:None 
   ~in_product_since:rel_rio
   ~doc:"Deactivate the specified PBD, causing the referenced SR to be detached and nolonger scanned"
-  ~params:[Ref _pbd, "self", "The PBD to deactivate"]
+  ~params:(make_params [Ref _pbd, "self",  "The PBD to deactivate"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3483,7 +3529,7 @@ let task_cancel = call
   ~name:"cancel"
   ~in_product_since:rel_rio
   ~doc:"Request that a task be cancelled. Note that a task may fail to be cancelled and may complete or fail normally and note that, even when a task does cancel, it might take an arbitrary amount of time."
-  ~params:[Ref _task, "task", "The task"]
+  ~params:(make_params [Ref _task, "task",  "The task"])
   ~errs:[Api_errors.operation_not_allowed]
   ~allowed_roles:_R_READ_ONLY (* POOL_OP can cancel any tasks, others can cancel only owned tasks *)
   ()
@@ -3494,8 +3540,8 @@ let task_create = call ~flags:[`Session]
   ~in_product_since:rel_rio
   ~name:"create"
   ~doc:"Create a new task object which must be manually destroyed."
-  ~params:[String, "label", "short label for the new task";
-   String, "description", "longer description for the new task"]
+  ~params:(make_params [String, "label",  "short label for the new task";
+   String, "description",  "longer description for the new task"])
   ~result:(Ref _task, "The reference of the created task object")
   ~allowed_roles:_R_READ_ONLY (* any subject can create tasks *)
   ()
@@ -3505,7 +3551,7 @@ let task_destroy = call ~flags:[`Session]
   ~in_product_since:rel_rio
   ~name:"destroy"
   ~doc:"Destroy the task object"
-  ~params:[Ref _task, "self", "Reference to the task object"]
+  ~params:(make_params [Ref _task, "self",  "Reference to the task object"])
   ~allowed_roles:_R_READ_ONLY (* POOL_OP can destroy any tasks, others can destroy only owned tasks *)
   ()
 (* this permission allows to destroy any task, instead of only the owned ones *)
@@ -3612,7 +3658,7 @@ let host_crashdump_destroy = call
   ~doc:"Destroy specified host crash dump, removing it from the disk."
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[ Ref _host_crashdump, "self", "The host crashdump to destroy" ]
+  ~params:(make_params [ Ref _host_crashdump, "self",  "The host crashdump to destroy" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3621,9 +3667,15 @@ let host_crashdump_upload = call
   ~doc:"Upload the specified host crash dump to a specified URL"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[ Ref _host_crashdump, "self", "The host crashdump to upload";
-	    String, "url", "The URL to upload to";
-	    Map(String, String), "options", "Extra configuration operations" ]
+  ~params:(make_params [ Ref _host_crashdump, "self",  "The host crashdump to upload";
+		String, "url",  "The URL to upload to"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"options"
+			~doc:"Extra configuration operations"
+			~map_keys:["http_proxy", "address for upload with a http proxy."]
+			()
+		])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3658,7 +3710,7 @@ let pool_patch_apply = call
   ~doc:"Apply the selected patch to a host and return its output"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[ Ref _pool_patch, "self", "The patch to apply"; Ref _host, "host", "The host to apply the patch too" ]  
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to apply"; Ref _host, "host",  "The host to apply the patch too" ])  
   ~result:(String, "the output of the patch application process")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3668,7 +3720,7 @@ let pool_patch_precheck = call
   ~doc:"Execute the precheck stage of the selected patch on a host and return its output"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[ Ref _pool_patch, "self", "The patch whose prechecks will be run"; Ref _host, "host", "The host to run the prechecks on" ]  
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch whose prechecks will be run"; Ref _host, "host",  "The host to run the prechecks on" ])  
   ~result:(String, "the output of the patch prechecks")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3678,7 +3730,7 @@ let pool_patch_clean = call
   ~doc:"Removes the patch's files from the server"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[ Ref _pool_patch, "self", "The patch to clean up" ]
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to clean up" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3687,7 +3739,7 @@ let pool_patch_clean_on_host = call
   ~doc:"Removes the patch's files from the specified host"
   ~in_oss_since:None
   ~in_product_since:rel_tampa
-  ~params:[ Ref _pool_patch, "self", "The patch to clean up"; Ref _host, "host", "The host on which to clean the patch"  ]
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to clean up"; Ref _host, "host",  "The host on which to clean the patch"  ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3696,7 +3748,7 @@ let pool_patch_pool_clean = call
   ~doc:"Removes the patch's files from all hosts in the pool, but does not remove the database entries"
   ~in_oss_since:None
   ~in_product_since:rel_tampa
-  ~params:[ Ref _pool_patch, "self", "The patch to clean up" ]
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to clean up" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3705,7 +3757,7 @@ let pool_patch_destroy = call
   ~doc:"Removes the patch's files from all hosts in the pool, and removes the database entries.  Only works on unapplied patches."
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[ Ref _pool_patch, "self", "The patch to destroy" ]
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to destroy" ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3714,7 +3766,7 @@ let pool_patch_pool_apply = call
   ~doc:"Apply the selected patch to all hosts in the pool and return a map of host_ref -> patch output"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[ Ref _pool_patch, "self", "The patch to apply"]  
+  ~params:(make_params [ Ref _pool_patch, "self",  "The patch to apply"])  
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3754,7 +3806,7 @@ let host_patch_destroy = call
   ~doc:"Destroy the specified host patch, removing it from the disk. This does NOT reverse the patch"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[ Ref _host_patch, "self", "The patch to destroy" ]
+  ~params:(make_params [ Ref _host_patch, "self",  "The patch to destroy" ])
   ~internal_deprecated_since: rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3764,7 +3816,7 @@ let host_patch_apply = call
   ~doc:"Apply the selected patch and return its output"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[ Ref _host_patch, "self", "The patch to apply" ]  
+  ~params:(make_params [ Ref _host_patch, "self",  "The patch to apply" ])  
   ~result:(String, "the output of the patch application process")
   ~internal_deprecated_since: rel_miami
   ~allowed_roles:_R_POOL_OP
@@ -3795,9 +3847,15 @@ let host_bugreport_upload = call
   ~doc:"Run xen-bugtool --yestoall and upload the output to Citrix support"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[ Ref _host, "host", "The host on which to run xen-bugtool";
-	    String, "url", "The URL to upload to";
-	    Map(String, String), "options", "Extra configuration operations" ]
+  ~params:(make_params [ Ref _host, "host",  "The host on which to run xen-bugtool";
+		String, "url",  "The URL to upload to"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"options"
+			~doc:"Extra configuration operations"
+			~map_keys:["http_proxy", "address for upload with a http proxy."]
+			()
+		])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3806,7 +3864,7 @@ let host_list_methods = call
   ~in_product_since:rel_rio
   ~flags: [`Session]
   ~doc:"List all supported methods"
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Set(String), "The name of every supported method.")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -3818,8 +3876,8 @@ let host_license_apply = call
     Published, rel_rio, "Apply a new license to a host";
     Removed, rel_clearwater, "Free licenses no longer handled by xapi";
   ]
-  ~params:[Ref _host, "host", "The host to upload the license to";
-	   String, "contents", "The contents of the license file, base64 encoded"]
+  ~params:(make_params [Ref _host, "host",  "The host to upload the license to";
+	   String, "contents",  "The contents of the license file, base64 encoded"])
   ~doc:"Apply a new license to a host"
   ~errs: [Api_errors.license_processing_error]
   ~allowed_roles:_R_POOL_OP
@@ -3827,26 +3885,26 @@ let host_license_apply = call
 
 let host_create_params =
   [
-    {param_type=String; param_name="uuid"; param_doc="unique identifier/object reference"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="name_label"; param_doc="The name of the new storage repository"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="name_description"; param_doc="The description of the new storage repository"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="hostname"; param_doc="Hostname"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="address"; param_doc="An address by which this host can be contacted by other members in its pool"; param_release=rio_release; param_default=None};
-    {param_type=String; param_name="external_auth_type"; param_doc="type of external authentication service configured; empty if none configured"; param_release=george_release; param_default=Some(VString "")};
-    {param_type=String; param_name="external_auth_service_name"; param_doc="name of external authentication service configured; empty if none configured"; param_release=george_release; param_default=Some(VString "")};
-    {param_type=Map(String,String); param_name="external_auth_configuration"; param_doc="configuration specific to external authentication service"; param_release=george_release; param_default=Some(VMap [])};
-    {param_type=Map(String,String); param_name="license_params"; param_doc="State of the current license"; param_release=midnight_ride_release; param_default=Some(VMap [])};
-    {param_type=String; param_name="edition"; param_doc="XenServer edition"; param_release=midnight_ride_release; param_default=Some(VString "")};
-    {param_type=Map(String,String); param_name="license_server"; param_doc="Contact information of the license server"; param_release=midnight_ride_release; param_default=Some(VMap [VString "address", VString "localhost"; VString "port", VString "27000"])};
-    {param_type=Ref _sr; param_name="local_cache_sr"; param_doc="The SR that is used as a local cache"; param_release=cowley_release; param_default=(Some (VRef (Ref.string_of Ref.null)))};
-    {param_type=Map(String,String); param_name="chipset_info"; param_doc="Information about chipset features"; param_release=boston_release; param_default=Some(VMap [])};
+    param ~name:"uuid" ~ty:(String) ~doc:"unique identifier/object reference" ~release:rio_release ?default:None ();
+    param ~name:"name_label" ~ty:(String) ~doc:"The name of the new storage repository" ~release:rio_release ?default:None ();
+    param ~name:"name_description" ~ty:(String) ~doc:"The description of the new storage repository" ~release:rio_release ?default:None ();
+    param ~name:"hostname" ~ty:(String) ~doc:"Hostname" ~release:rio_release ?default:None ();
+    param ~name:"address" ~ty:(String) ~doc:"An address by which this host can be contacted by other members in its pool" ~release:rio_release ?default:None ();
+    param ~name:"external_auth_type" ~ty:(String) ~doc:"type of external authentication service configured; empty if none configured" ~release:george_release ?default:(Some (VString "")) ();
+    param ~name:"external_auth_service_name" ~ty:(String) ~doc:"name of external authentication service configured; empty if none configured" ~release:george_release ?default:(Some (VString "")) ();
+    param ~name:"external_auth_configuration" ~ty:(Map(String,String)) ~doc:"configuration specific to external authentication service" ~release:george_release ?default:(Some(VMap [])) ();
+    param ~name:"license_params" ~ty:(Map(String,String)) ~doc:"State of the current license" ~release:midnight_ride_release ?default:(Some (VMap [])) ();
+    param ~name:"edition" ~ty:(String) ~doc:"XenServer edition" ~release:midnight_ride_release ?default:(Some (VString "")) ();
+    param ~name:"license_server" ~ty:(Map(String,String)) ~doc:"Contact information of the license server" ~release:midnight_ride_release ?default:(Some (VMap [VString "address", VString "localhost"; VString "port", VString "27000"])) ();
+    param ~name:"local_cache_sr" ~ty:(Ref _sr) ~doc:"The SR that is used as a local cache" ~release:cowley_release ?default:(Some (VRef (Ref.string_of Ref.null))) ();
+    param ~name:"chipset_info" ~ty:(Map(String,String)) ~doc:"Information about chipset features" ~release:boston_release ?default:(Some (VMap [])) ();
   ]
 
 let host_create = call
   ~name:"create"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:host_create_params
+  ~params:host_create_params
   ~doc:"Create a new host record"
   ~result:(Ref _host, "Reference to the newly created host object.")
   ~hide_from_docs:true
@@ -3858,7 +3916,7 @@ let host_destroy = call
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~doc:"Destroy specified host record in database"
-  ~params:[(Ref _host, "self", "The host record to remove")]
+  ~params:(make_params [(Ref _host, "self",  "The host record to remove")])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -3866,7 +3924,7 @@ let host_get_system_status_capabilities = call ~flags:[`Session]
   ~name:"get_system_status_capabilities"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[Ref _host, "host", "The host to interrogate"]
+  ~params:(make_params [Ref _host, "host",  "The host to interrogate"])
   ~doc:""
   ~result:(String, "An XML fragment containing the system status capabilities.")
   ~allowed_roles:_R_READ_ONLY
@@ -3876,8 +3934,8 @@ let host_set_hostname_live = call ~flags:[`Session]
   ~name:"set_hostname_live"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-  ~params:[Ref _host, "host", "The host whose host name to set";
-           String, "hostname", "The new host name"]
+  ~params:(make_params [Ref _host, "host",  "The host whose host name to set";
+           String, "hostname",  "The new host name"])
   ~errs:[Api_errors.host_name_invalid]
   ~doc:"Sets the host name to the specified string.  Both the API and lower-level system hostname are changed immediately."
   ~allowed_roles:_R_POOL_OP
@@ -3887,9 +3945,17 @@ let host_tickle_heartbeat = call ~flags:[`Session]
   ~name:"tickle_heartbeat"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[Ref _host, "host", "The host calling the function, and whose heartbeat to tickle";
-	   Map(String, String), "stuff", "Anything else we want to let the master know";
-	  ]
+  ~params:(make_params [Ref _host, "host",  "The host calling the function, and whose heartbeat to tickle"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"stuff"
+			~doc:"Anything else we want to let the master know"
+			~map_keys:[
+				"shutting-down", "When a host is going down it will send a negative heartbeat";
+				"time", "Slave timer to compute the clock skew for later analysis"
+			]
+			()
+		])
   ~result:(Map(String, String), "Anything the master wants to tell the slave")
   ~doc:"Needs to be called every 30 seconds for the master to believe the host is alive"
   ~pool_internal:true
@@ -3901,7 +3967,7 @@ let host_sync_data = call ~flags:[`Session]
   ~name:"sync_data"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[Ref _host, "host", "The host to whom the data should be sent"]
+  ~params:(make_params [Ref _host, "host",  "The host to whom the data should be sent"])
   ~doc:"This causes the synchronisation of the non-database data (messages, RRDs and so on) stored on the master to be synchronised with the host"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -3910,8 +3976,8 @@ let host_backup_rrds = call ~flags:[`Session]
   ~name:"backup_rrds"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[Ref _host, "host", "Schedule a backup of the RRDs of this host";
-	   Float, "delay", "Delay in seconds from when the call is received to perform the backup"]
+  ~params:(make_params [Ref _host, "host",  "Schedule a backup of the RRDs of this host";
+	   Float, "delay",  "Delay in seconds from when the call is received to perform the backup"])
   ~doc:"This causes the RRDs to be backed up to the master"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -3920,7 +3986,7 @@ let host_get_servertime = call ~flags:[`Session]
   ~name:"get_servertime"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[Ref _host, "host", "The host whose clock should be queried"]
+  ~params:(make_params [Ref _host, "host",  "The host whose clock should be queried"])
   ~doc:"This call queries the host's clock for the current time"
   ~result:(DateTime, "The current time")
   ~allowed_roles:_R_READ_ONLY
@@ -3930,7 +3996,7 @@ let host_get_server_localtime = call ~flags:[`Session]
   ~name:"get_server_localtime"
   ~in_oss_since:None
   ~in_product_since:rel_cowley
-  ~params:[Ref _host, "host", "The host whose clock should be queried"]
+  ~params:(make_params [Ref _host, "host",  "The host whose clock should be queried"])
   ~doc:"This call queries the host's clock for the current time in the host's local timezone"
   ~result:(DateTime, "The current local time")
   ~allowed_roles:_R_READ_ONLY
@@ -3940,7 +4006,7 @@ let host_emergency_ha_disable = call ~flags:[`Session]
   ~name:"emergency_ha_disable"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[]
+  ~params:(make_params [])
   ~doc:"This call disables HA on the local host. This should only be used with extreme care."
   ~allowed_roles:_R_POOL_OP
   ()
@@ -3952,9 +4018,9 @@ let host_certificate_install = call
   ~hide_from_docs:true
   ~name:"certificate_install"
   ~doc:"Install an SSL certificate to this host."
-  ~params:[Ref _host, "host", "The host";
-           String, "name", "A name to give the certificate";
-           String, "cert", "The certificate"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+           String, "name",  "A name to give the certificate";
+           String, "cert",  "The certificate"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -3965,8 +4031,8 @@ let host_certificate_uninstall = call
   ~hide_from_docs:true
   ~name:"certificate_uninstall"
   ~doc:"Remove an SSL certificate from this host."
-  ~params:[Ref _host, "host", "The host";
-           String, "name", "The certificate name"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+           String, "name",  "The certificate name"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -3977,7 +4043,7 @@ let host_certificate_list = call
   ~hide_from_docs:true
   ~name:"certificate_list"
   ~doc:"List all installed SSL certificates."
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~result:(Set(String),"All installed certificates")
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
@@ -3989,9 +4055,9 @@ let host_crl_install = call
   ~hide_from_docs:true
   ~name:"crl_install"
   ~doc:"Install an SSL certificate revocation list to this host."
-  ~params:[Ref _host, "host", "The host";
-           String, "name", "A name to give the CRL";
-           String, "crl", "The CRL"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+           String, "name",  "A name to give the CRL";
+           String, "crl",  "The CRL"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -4002,8 +4068,8 @@ let host_crl_uninstall = call
   ~hide_from_docs:true
   ~name:"crl_uninstall"
   ~doc:"Remove an SSL certificate revocation list from this host."
-  ~params:[Ref _host, "host", "The host";
-           String, "name", "The CRL name"]
+  ~params:(make_params [Ref _host, "host",  "The host";
+           String, "name",  "The CRL name"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -4014,7 +4080,7 @@ let host_crl_list = call
   ~hide_from_docs:true
   ~name:"crl_list"
   ~doc:"List all installed SSL certificate revocation lists."
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~result:(Set(String),"All installed CRLs")
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
@@ -4026,7 +4092,7 @@ let host_certificate_sync = call
   ~hide_from_docs:true
   ~name:"certificate_sync"
   ~doc:"Resync installed SSL certificates and CRLs."
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ()
 
@@ -4035,7 +4101,7 @@ let host_get_server_certificate = call
   ~in_product_since:rel_george
   ~name:"get_server_certificate"
   ~doc:"Get the installed server SSL certificate."
-  ~params:[Ref _host, "host", "The host"]
+  ~params:(make_params [Ref _host, "host",  "The host"])
   ~result:(String,"The installed server SSL certificate, in PEM form.")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4056,12 +4122,24 @@ let host_enable_external_auth = call ~flags:[`Session]
   ~name:"enable_external_auth"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
-    Ref _host, "host", "The host whose external authentication should be enabled"; 
-    Map (String,String), "config", "A list of key-values containing the configuration data" ; 
-    String, "service_name", "The name of the service" ; 
-    String, "auth_type", "The type of authentication (e.g. AD for Active Directory)" 
-    ]
+  ~params:(make_params [
+		Ref _host, "host",  "The host whose external authentication should be enabled"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"config"
+			~doc:"A list of key-values containing the configuration data"
+			~map_keys:[
+				"user", "domain user name, only for AD auth type"; 
+				"pass", "domain user password, only for AD auth type";
+				"domian", "domain name, only for AD auth type";
+				"ou", "domain organizational unit, only for AD auth type";
+				"disable_modules", "--disable arguments for domainjoin-cli, only for AD auth type";
+			]
+			()
+		] @ (make_params [
+    String, "service_name",  "The name of the service" ; 
+    String, "auth_type",  "The type of authentication (e.g. AD for Active Directory)" 
+    ]))
   ~doc:"This call enables external authentication on a host"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -4070,9 +4148,9 @@ let host_disable_external_auth = call ~flags:[`Session]
   ~name:"disable_external_auth"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~versioned_params:[
-    {param_type=Ref _host; param_name="host"; param_doc="The host whose external authentication should be disabled"; param_release=george_release; param_default=None};
-    {param_type=Map (String, String); param_name="config"; param_doc="Optional parameters as a list of key-values containing the configuration data"; param_release=george_release; param_default=Some (VMap [])}
+  ~params:[
+    param ~name:"host" ~ty:(Ref _host) ~doc:"The host whose external authentication should be disabled" ~release:george_release ?default:None ();
+    param ~name:"config" ~ty:(Map (String, String)) ~doc:"Optional parameters as a list of key-values containing the configuration data" ~release:george_release ?default:(Some (VMap [])) ()
     ]
   ~doc:"This call disables external authentication on the local host"
   ~allowed_roles:_R_POOL_ADMIN
@@ -4082,10 +4160,10 @@ let host_set_license_params = call
   ~name:"set_license_params"
   ~in_product_since:rel_orlando (* actually update 3 aka floodgate *)
   ~doc:"Set the new license details in the database, trigger a recomputation of the pool SKU"
-  ~params:[ 
-    Ref _host, "self", "The host";
+  ~params:(make_params [ 
+    Ref _host, "self",  "The host";
     Map(String, String), "value", "The license_params"
-  ]
+  ])
   ~hide_from_docs:true
   ~pool_internal:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -4095,10 +4173,10 @@ let host_apply_edition = call ~flags:[`Session]
   ~name:"apply_edition"
   ~in_product_since:rel_midnight_ride
   ~doc:"Change to another edition, or reactivate the current edition after a license has expired. This may be subject to the successful checkout of an appropriate license."
-  ~versioned_params:[
-    {param_type=Ref _host; param_name="host"; param_doc="The host"; param_release=midnight_ride_release; param_default=None};
-    {param_type=String; param_name="edition"; param_doc="The requested edition"; param_release=midnight_ride_release; param_default=None};
-    {param_type=Bool; param_name="force"; param_doc="Update the license params even if the apply call fails"; param_release=clearwater_release; param_default=Some (VBool false)};
+  ~params:[
+    param ~name:"host" ~ty:(Ref _host) ~doc:"The host" ~release:midnight_ride_release ?default:None ();
+    param ~name:"edition" ~ty:(String) ~doc:"The requested edition" ~release:midnight_ride_release ?default:None ();
+    param ~name:"force" ~ty:(Bool) ~doc:"Update the license params even if the apply call fails" ~release:clearwater_release ?default:(Some (VBool false)) ();
   ]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4107,11 +4185,20 @@ let host_set_power_on_mode = call
   ~name:"set_power_on_mode"
   ~in_product_since:rel_midnight_ride
   ~doc:"Set the power-on-mode, host, user and password "
-  ~params:[ 
-    Ref _host, "self", "The host";
-    String, "power_on_mode", "power-on-mode can be empty,iLO,wake-on-lan, DRAC or other";
-    Map(String, String), "power_on_config", "Power on config";
-          ]
+  ~params:(make_params [ 
+    Ref _host, "self",  "The host";
+    String, "power_on_mode",  "power-on-mode can be empty,iLO,wake-on-lan, DRAC or other"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"power_on_config"
+			~doc:"Power on config"
+			~map_keys:[
+				"power_on_ip", "ipaddr for iLO/DRAC mode";
+				"power_on_user", "username for iLO/DRAC mode";
+				"power_on_password_secret", "password secret for iLO/DRAC mode";
+			]
+			()
+		])
   ~allowed_roles:_R_POOL_OP
   ()
   
@@ -4119,10 +4206,10 @@ let host_set_cpu_features = call ~flags:[`Session]
   ~name:"set_cpu_features"
   ~in_product_since:rel_midnight_ride
   ~doc:"Set the CPU features to be used after a reboot, if the given features string is valid."
-  ~params:[ 
-    Ref _host, "host", "The host";
-    String, "features", "The features string (32 hexadecimal digits)"
-  ]
+  ~params:(make_params [ 
+    Ref _host, "host",  "The host";
+    String, "features",  "The features string (32 hexadecimal digits)"
+  ])
   ~allowed_roles:_R_POOL_OP
   ()
   
@@ -4130,9 +4217,9 @@ let host_reset_cpu_features = call ~flags:[`Session]
   ~name:"reset_cpu_features"
   ~in_product_since:rel_midnight_ride
   ~doc:"Remove the feature mask, such that after a reboot all features of the CPU are enabled."
-  ~params:[ 
-    Ref _host, "host", "The host"
-  ]
+  ~params:(make_params [ 
+    Ref _host, "host",  "The host"
+  ])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -4140,7 +4227,7 @@ let host_reset_networking = call
 	~name:"reset_networking"
 	~lifecycle:[]
 	~doc:"Purge all network-related metadata associated with the given host."
-	~params:[Ref _host, "host", "The Host to modify"]
+	~params:(make_params [Ref _host, "host",  "The Host to modify"])
 	~allowed_roles:_R_POOL_OP
 	~hide_from_docs:true
 	() 
@@ -4149,10 +4236,10 @@ let host_enable_local_storage_caching = call ~flags:[`Session]
 	~name:"enable_local_storage_caching"
 	~in_product_since:rel_cowley
 	~doc:"Enable the use of a local SR for caching purposes"
-	~params:[
-		Ref _host, "host", "The host";
-		Ref _sr, "sr", "The SR to use as a local cache"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+		Ref _sr, "sr",  "The SR to use as a local cache"
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -4160,9 +4247,9 @@ let host_disable_local_storage_caching = call ~flags:[`Session]
 	~name:"disable_local_storage_caching"
 	~in_product_since:rel_cowley
 	~doc:"Disable the use of a local SR for caching purposes"
-	~params:[
-		Ref _host, "host", "The host"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host"
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -4170,9 +4257,9 @@ let host_get_sm_diagnostics = call ~flags:[`Session]
 	~name:"get_sm_diagnostics"
 	~in_product_since:rel_boston
 	~doc:"Return live SM diagnostics"
-	~params:[
-		Ref _host, "host", "The host"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host"
+	])
 	~result:(String, "Printable diagnostic data")
 	~allowed_roles:_R_POOL_OP
 	~hide_from_docs:true
@@ -4182,9 +4269,9 @@ let host_get_thread_diagnostics = call ~flags:[`Session]
 	~name:"get_thread_diagnostics"
 	~in_product_since:rel_boston
 	~doc:"Return live thread diagnostics"
-	~params:[
-		Ref _host, "host", "The host"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host"
+	])
 	~result:(String, "Printable diagnostic data")
 	~allowed_roles:_R_POOL_OP
 	~hide_from_docs:true
@@ -4194,11 +4281,11 @@ let host_sm_dp_destroy = call ~flags:[`Session]
 	~name:"sm_dp_destroy"
 	~in_product_since:rel_boston
 	~doc:"Attempt to cleanup and destroy a named SM datapath"
-	~params:[
-		Ref _host, "host", "The host";
-		String, "dp", "The datapath";
-		Bool, "allow_leak", "If true, all records of the datapath will be removed even if the datapath could not be destroyed cleanly.";
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+		String, "dp",  "The datapath";
+		Bool, "allow_leak",  "If true, all records of the datapath will be removed even if the datapath could not be destroyed cleanly.";
+	])
 	~allowed_roles:_R_POOL_OP
 	~hide_from_docs:true
 	()
@@ -4207,9 +4294,9 @@ let host_sync_vlans = call ~flags:[`Session]
 	~name:"sync_vlans"
 	~lifecycle:[]
 	~doc:"Synchronise VLANs on given host with the master's VLANs"
-	~params:[
-		Ref _host, "host", "The host";
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+	])
 	~hide_from_docs:true
 	~pool_internal:true
 	~allowed_roles:_R_POOL_OP
@@ -4219,9 +4306,9 @@ let host_sync_tunnels = call ~flags:[`Session]
 	~name:"sync_tunnels"
 	~lifecycle:[]
 	~doc:"Synchronise tunnels on given host with the master's tunnels"
-	~params:[
-		Ref _host, "host", "The host";
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+	])
 	~hide_from_docs:true
 	~pool_internal:true
 	~allowed_roles:_R_POOL_OP
@@ -4231,10 +4318,10 @@ let host_sync_pif_currently_attached = call ~flags:[`Session]
 	~name:"sync_pif_currently_attached"
 	~lifecycle:[]
 	~doc:"Synchronise tunnels on given host with the master's tunnels"
-	~params:[
-		Ref _host, "host", "The host";
-		Set String, "bridges", "A list of bridges that are currently up";
-	]
+	~params:(make_params [
+		Ref _host, "host",  "The host";
+		Set String, "bridges",  "A list of bridges that are currently up";
+	])
 	~hide_from_docs:true
 	~pool_internal:true
 	~allowed_roles:_R_POOL_OP
@@ -4437,8 +4524,8 @@ let network_default_locking_mode =
 let network_attach = call
   ~name:"attach"
   ~doc:"Makes the network immediately available on a particular host"
-  ~params:[Ref _network, "network", "network to which this interface should be connected";
-	   Ref _host, "host", "physical machine to which this PIF is connected"]
+  ~params:(make_params [Ref _network, "network",  "network to which this interface should be connected";
+	   Ref _host, "host",  "physical machine to which this PIF is connected"])
   ~in_product_since:rel_miami  
   ~hide_from_docs:true
   ~allowed_roles:_R_POOL_OP
@@ -4446,11 +4533,11 @@ let network_attach = call
 
 let network_introduce_params first_rel =
   [
-    {param_type=String; param_name="name_label"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="name_description"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Int; param_name="MTU"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Map(String,String); param_name="other_config"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="bridge"; param_doc=""; param_release=first_rel; param_default=None};
+    param ~name:"name_label" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"name_description" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"MTU" ~ty:(Int) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"other_config" ~ty:(Map(String,String)) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"bridge" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
   ]
 
 (* network pool introduce is used to copy network records on pool join -- it's the network analogue of VDI/PIF.pool_introduce *)
@@ -4458,7 +4545,7 @@ let network_pool_introduce = call
   ~name:"pool_introduce"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:(network_introduce_params miami_release)
+  ~params:(network_introduce_params miami_release)
   ~doc:"Create a new network record in the database only"
   ~result:(Ref _network, "The ref of the newly created network record.")
   ~hide_from_docs:true
@@ -4469,11 +4556,11 @@ let network_create_new_blob = call
   ~name: "create_new_blob"
   ~in_product_since:rel_orlando
   ~doc:"Create a placeholder for a named binary blob of data that is associated with this pool"
-  ~versioned_params:
-  [{param_type=Ref _network; param_name="network"; param_doc="The network"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="name"; param_doc="The name associated with the blob"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="mime_type"; param_doc="The mime type for the data. Empty string translates to application/octet-stream"; param_release=orlando_release; param_default=None};
-  {param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}
+  ~params:
+  [param ~name:"network" ~ty:(Ref _network) ~doc:"The network" ~release:orlando_release ?default:None ();
+  param ~name:"name" ~ty:(String) ~doc:"The name associated with the blob" ~release:orlando_release ?default:None ();
+  param ~name:"mime_type" ~ty:(String) ~doc:"The mime type for the data. Empty string translates to application/octet-stream" ~release:orlando_release ?default:None ();
+  param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()
   ]
   ~result:(Ref _blob, "The reference of the blob, needed for populating its data")
   ~allowed_roles:_R_POOL_OP
@@ -4483,20 +4570,20 @@ let network_set_default_locking_mode = call
 	~name:"set_default_locking_mode"
 	~in_product_since:rel_tampa
 	~doc:"Set the default locking mode for VIFs attached to this network"
-	~params:[
-		Ref _network, "network", "The network";
-		network_default_locking_mode, "value", "The default locking mode for VIFs attached to this network.";
-	]
+	~params:(make_params [
+		Ref _network, "network",  "The network";
+		network_default_locking_mode, "value",  "The default locking mode for VIFs attached to this network.";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
 let network_attach_for_vm = call
 	~name:"attach_for_vm"
 	~doc:"Attaches all networks needed by a given VM on a particular host"
-	~params:[
-		Ref _host, "host", "Physical machine to which the networks are to be attached";
-		Ref _vm, "vm", "The virtual machine"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "Physical machine to which the networks are to be attached";
+		Ref _vm, "vm",  "The virtual machine"
+	])
 	~in_product_since:rel_tampa
 	~hide_from_docs:true
 	~allowed_roles:_R_POOL_OP
@@ -4505,10 +4592,10 @@ let network_attach_for_vm = call
 let network_detach_for_vm = call
 	~name:"detach_for_vm"
 	~doc:"Detaches all networks of a given VM from a particular host"
-	~params:[
-		Ref _host, "host", "Physical machine from which the networks are to be attached";
-		Ref _vm, "vm", "The virtual machine"
-	]
+	~params:(make_params [
+		Ref _host, "host",  "Physical machine from which the networks are to be attached";
+		Ref _vm, "vm",  "The virtual machine"
+	])
 	~in_product_since:rel_tampa
 	~hide_from_docs:true
 	~allowed_roles:_R_POOL_OP
@@ -4546,10 +4633,10 @@ let pif_create_VLAN = call
     Published, rel_rio, "Create a VLAN interface from an existing physical interface";
     Deprecated, rel_miami, "Replaced by VLAN.create";
   ]
-  ~params:[String, "device", "physical interface on which to create the VLAN interface";
-	   Ref _network, "network", "network to which this interface should be connected";
-	   Ref _host, "host", "physical machine to which this PIF is connected";
-	   Int, "VLAN", "VLAN tag for the new interface"]
+  ~params:(make_params [String, "device",  "physical interface on which to create the VLAN interface";
+	   Ref _network, "network",  "network to which this interface should be connected";
+	   Ref _host, "host",  "physical machine to which this PIF is connected";
+	   Int, "VLAN",  "VLAN tag for the new interface"])
   ~result:(Ref _pif, "The reference of the created PIF object")
   ~errs:[Api_errors.vlan_tag_invalid]
   ~internal_deprecated_since:rel_miami
@@ -4564,7 +4651,7 @@ let pif_destroy = call
     Published, rel_rio, "Destroy the PIF object (provided it is a VLAN interface)";
     Deprecated, rel_miami, "Replaced by VLAN.destroy and Bond.destroy";
   ]
-  ~params:[Ref _pif, "self", "the PIF object to destroy"]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to destroy"])
   ~errs:[Api_errors.pif_is_physical]
   ~internal_deprecated_since:rel_miami
   ~allowed_roles:_R_POOL_OP
@@ -4573,7 +4660,7 @@ let pif_destroy = call
 let pif_plug = call
   ~name:"plug"
   ~doc:"Attempt to bring up a physical interface"
-  ~params:[Ref _pif, "self", "the PIF object to plug"]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to plug"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ~errs:[Api_errors.transport_pif_not_configured]
@@ -4582,7 +4669,7 @@ let pif_plug = call
 let pif_unplug = call
   ~name:"unplug"
   ~doc:"Attempt to bring down a physical interface"
-  ~params:[Ref _pif, "self", "the PIF object to unplug"]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to unplug"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4595,13 +4682,13 @@ let pif_ip_configuration_mode = Enum ("ip_configuration_mode",
 let pif_reconfigure_ip = call
   ~name:"reconfigure_ip"
   ~doc:"Reconfigure the IP address settings for this interface"
-  ~params:[Ref _pif, "self", "the PIF object to reconfigure";
-	   pif_ip_configuration_mode, "mode", "whether to use dynamic/static/no-assignment";
-	   String, "IP", "the new IP address";
-	   String, "netmask", "the new netmask";
-	   String, "gateway", "the new gateway";
-	   String, "DNS", "the new DNS settings";
-	  ]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to reconfigure";
+	   pif_ip_configuration_mode, "mode",  "whether to use dynamic/static/no-assignment";
+	   String, "IP",  "the new IP address";
+	   String, "netmask",  "the new netmask";
+	   String, "gateway",  "the new gateway";
+	   String, "DNS",  "the new DNS settings";
+	  ])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4615,12 +4702,12 @@ let pif_ipv6_configuration_mode = Enum ("ipv6_configuration_mode",
 let pif_reconfigure_ipv6 = call
   ~name:"reconfigure_ipv6"
   ~doc:"Reconfigure the IPv6 address settings for this interface"
-  ~params:[Ref _pif, "self", "the PIF object to reconfigure";
-	   pif_ipv6_configuration_mode, "mode", "whether to use dynamic/static/no-assignment";
-	   String, "IPv6", "the new IPv6 address (in <addr>/<prefix length> format)";
-	   String, "gateway", "the new gateway";
-	   String, "DNS", "the new DNS settings";
-	  ]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to reconfigure";
+	   pif_ipv6_configuration_mode, "mode",  "whether to use dynamic/static/no-assignment";
+	   String, "IPv6",  "the new IPv6 address (in <addr>/<prefix length> format)";
+	   String, "gateway",  "the new gateway";
+	   String, "DNS",  "the new DNS settings";
+	  ])
   ~lifecycle:[Prototyped, rel_tampa, ""]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4632,9 +4719,9 @@ let pif_primary_address_type = Enum ("primary_address_type",
 let pif_set_primary_address_type = call
   ~name:"set_primary_address_type"
   ~doc:"Change the primary address type used by this PIF"
-  ~params:[Ref _pif, "self", "the PIF object to reconfigure";
-	   pif_primary_address_type, "primary_address_type", "Whether to prefer IPv4 or IPv6 connections";
-	  ]
+  ~params:(make_params [Ref _pif, "self",  "the PIF object to reconfigure";
+	   pif_primary_address_type, "primary_address_type",  "Whether to prefer IPv4 or IPv6 connections";
+	  ])
   ~lifecycle:[Prototyped, rel_tampa, ""]
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4642,23 +4729,23 @@ let pif_set_primary_address_type = call
 let pif_scan = call
   ~name:"scan"
   ~doc:"Scan for physical interfaces on a host and create PIF objects to represent them"
-  ~params:[Ref _host, "host", "The host on which to scan"]
+  ~params:(make_params [Ref _host, "host",  "The host on which to scan"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
 
 let pif_introduce_params =
 	[
-		{param_type=Ref _host; param_name="host"; param_doc="The host on which the interface exists"; param_release=miami_release; param_default=None};
-		{param_type=String; param_name="MAC"; param_doc="The MAC address of the interface"; param_release=miami_release; param_default=None};
-		{param_type=String; param_name="device"; param_doc="The device name to use for the interface"; param_release=miami_release; param_default=None};
-		{param_type=Bool; param_name="managed"; param_doc="Indicates whether the interface is managed by xapi (defaults to \"true\")"; param_release=vgpu_productisation_release; param_default=Some (VBool true)};
+		param ~name:"host" ~ty:(Ref _host) ~doc:"The host on which the interface exists" ~release:miami_release ?default:None ();
+		param ~name:"MAC" ~ty:(String) ~doc:"The MAC address of the interface" ~release:miami_release ?default:None ();
+		param ~name:"device" ~ty:(String) ~doc:"The device name to use for the interface" ~release:miami_release ?default:None ();
+		param ~name:"managed" ~ty:(Bool) ~doc:"Indicates whether the interface is managed by xapi (defaults to \"true\")" ~release:vgpu_productisation_release ?default:(Some (VBool true)) ();
 	]
 
 let pif_introduce = call
   ~name:"introduce"
   ~doc:"Create a PIF object matching a particular network interface"
-  ~versioned_params:pif_introduce_params
+  ~params:pif_introduce_params
   ~in_product_since:rel_miami
   ~result:(Ref _pif, "The reference of the created PIF object")
   ~allowed_roles:_R_POOL_OP
@@ -4667,7 +4754,7 @@ let pif_introduce = call
 let pif_forget = call
   ~name:"forget"
   ~doc:"Destroy the PIF object matching a particular network interface"
-  ~params:[Ref _pif, "self", "The PIF object to destroy"]
+  ~params:(make_params [Ref _pif, "self",  "The PIF object to destroy"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ~errs:[Api_errors.pif_tunnel_still_exists]
@@ -4675,29 +4762,29 @@ let pif_forget = call
 
 let pif_pool_introduce_params first_rel =
   [
-    {param_type=String; param_name="device"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Ref _network; param_name="network"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Ref _host; param_name="host"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="MAC"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Int; param_name="MTU"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Int; param_name="VLAN"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Bool; param_name="physical"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=pif_ip_configuration_mode; param_name="ip_configuration_mode"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="IP"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="netmask"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="gateway"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="DNS"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Ref _bond; param_name="bond_slave_of"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Ref _vlan; param_name="VLAN_master_of"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Bool; param_name="management"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Map(String, String); param_name="other_config"; param_doc=""; param_release=first_rel; param_default=None};
-    {param_type=Bool; param_name="disallow_unplug"; param_doc=""; param_release=orlando_release; param_default=Some (VBool false)};
-    {param_type=pif_ipv6_configuration_mode; param_name="ipv6_configuration_mode"; param_doc=""; param_release=boston_release; param_default=Some (VEnum "None")};
-    {param_type=(Set(String)); param_name="IPv6"; param_doc=""; param_release=boston_release; param_default=Some (VSet [])};
-    {param_type=String; param_name="ipv6_gateway"; param_doc=""; param_release=boston_release; param_default=Some (VString "")};
-    {param_type=pif_primary_address_type; param_name="primary_address_type"; param_doc=""; param_release=boston_release; param_default=Some (VEnum "IPv4")};
-    {param_type=Bool; param_name="managed"; param_doc=""; param_release=vgpu_productisation_release; param_default=Some (VBool true)};
-    {param_type=Map(String, String); param_name="properties"; param_doc=""; param_release=creedence_release; param_default=Some (VMap [])};
+    param ~name:"device" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"network" ~ty:(Ref _network) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"host" ~ty:(Ref _host) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"MAC" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"MTU" ~ty:(Int) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"VLAN" ~ty:(Int) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"physical" ~ty:(Bool) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"ip_configuration_mode" ~ty:(pif_ip_configuration_mode) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"IP" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"netmask" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"gateway" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"DNS" ~ty:(String) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"bond_slave_of" ~ty:(Ref _bond) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"VLAN_master_of" ~ty:(Ref _vlan) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"management" ~ty:(Bool) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"other_config" ~ty:(Map(String, String)) ~doc:"" ~release:first_rel ?default:None ();
+    param ~name:"disallow_unplug" ~ty:(Bool) ~doc:"" ~release:orlando_release ?default:(Some (VBool false)) ();
+    param ~name:"ipv6_configuration_mode" ~ty:(pif_ipv6_configuration_mode) ~doc:"" ~release:boston_release ?default:(Some (VEnum "None")) ();
+    param ~name:"IPv6" ~ty:(Set(String)) ~doc:"" ~release:boston_release ?default:(Some (VSet [])) ();
+    param ~name:"ipv6_gateway" ~ty:(String) ~doc:"" ~release:boston_release ?default:(Some (VString "")) ();
+    param ~name:"primary_address_type" ~ty:(pif_primary_address_type) ~doc:"" ~release:boston_release ?default:(Some (VEnum "IPv4")) ();
+    param ~name:"managed" ~ty:(Bool) ~doc:"" ~release:vgpu_productisation_release ?default:(Some (VBool true)) ();
+    param ~name:"properties" ~ty:(Map(String, String)) ~doc:"" ~release:creedence_release ?default:(Some (VMap [])) ();
   ]
 
 (* PIF pool introduce is used to copy PIF records on pool join -- it's the PIF analogue of VDI.pool_introduce *)
@@ -4705,7 +4792,7 @@ let pif_pool_introduce = call
   ~name:"pool_introduce"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:(pif_pool_introduce_params miami_release)
+  ~params:(pif_pool_introduce_params miami_release)
   ~doc:"Create a new PIF record in the database only"
   ~result:(Ref _pif, "The ref of the newly created PIF record.")
   ~hide_from_docs:true
@@ -4716,7 +4803,7 @@ let pif_db_introduce = call
   ~name:"db_introduce"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~versioned_params:(pif_pool_introduce_params orlando_release)
+  ~params:(pif_pool_introduce_params orlando_release)
   ~doc:"Create a new PIF record in the database only"
   ~result:(Ref _pif, "The ref of the newly created PIF record.")
   ~hide_from_docs:false
@@ -4727,7 +4814,7 @@ let pif_db_forget = call
   ~name:"db_forget"
   ~in_oss_since:None
   ~in_product_since:rel_orlando
-  ~params:[ Ref _pif, "self", "The ref of the PIF whose database record should be destroyed" ]
+  ~params:(make_params [ Ref _pif, "self",  "The ref of the PIF whose database record should be destroyed" ])
   ~doc:"Destroy a PIF database record."
   ~hide_from_docs:false
   ~allowed_roles:_R_POOL_OP
@@ -4736,11 +4823,11 @@ let pif_db_forget = call
 let pif_set_property = call
 	~name:"set_property"
 	~doc:"Set the value of a property of the PIF"
-	~params:[
-		Ref _pif, "self", "The PIF";
-		String, "name", "The property name";
-		String, "value", "The property value";
-	]
+	~params:(make_params [
+		Ref _pif, "self",  "The PIF";
+		String, "name",  "The property name";
+		String, "value",  "The property value";
+	])
 	~lifecycle:[Published, rel_creedence, ""]
 	~allowed_roles:_R_POOL_OP
 	()
@@ -4826,12 +4913,12 @@ let bond_mode =
 let bond_create = call
   ~name:"create"
   ~doc:"Create an interface bond"
-  ~versioned_params:[
-    {param_type=Ref _network; param_name="network"; param_doc="Network to add the bonded PIF to"; param_release=miami_release; param_default=None};
-    {param_type=Set (Ref _pif); param_name="members"; param_doc="PIFs to add to this bond"; param_release=miami_release; param_default=None};
-    {param_type=String; param_name="MAC"; param_doc="The MAC address to use on the bond itself. If this parameter is the empty string then the bond will inherit its MAC address from the primary slave."; param_release=miami_release; param_default=None};
-    {param_type=bond_mode; param_name="mode"; param_doc="Bonding mode to use for the new bond"; param_release=boston_release; param_default=Some (VEnum "balance-slb")};
-    {param_type=Map (String, String); param_name="properties"; param_doc="Additional configuration parameters specific to the bond mode"; param_release=tampa_release; param_default=Some (VMap [])};
+  ~params:[
+    param ~name:"network" ~ty:(Ref _network) ~doc:"Network to add the bonded PIF to" ~release:miami_release ?default:None ();
+    param ~name:"members" ~ty:(Set (Ref _pif)) ~doc:"PIFs to add to this bond" ~release:miami_release ?default:None ();
+    param ~name:"MAC" ~ty:(String) ~doc:"The MAC address to use on the bond itself. If this parameter is the empty string then the bond will inherit its MAC address from the primary slave." ~release:miami_release ?default:None ();
+    param ~name:"mode" ~ty:(bond_mode) ~doc:"Bonding mode to use for the new bond" ~release:boston_release ?default:(Some (VEnum "balance-slb")) ();
+    param ~name:"properties" ~ty:(Map (String, String)) ~doc:"Additional configuration parameters specific to the bond mode" ~release:tampa_release ?default:(Some (VMap [])) ();
   ]
   ~result:(Ref _bond, "The reference of the created Bond object")
   ~in_product_since:rel_miami
@@ -4841,7 +4928,7 @@ let bond_create = call
 let bond_destroy = call
   ~name:"destroy"
   ~doc:"Destroy an interface bond"
-  ~params:[Ref _bond, "self", "Bond to destroy"]
+  ~params:(make_params [Ref _bond, "self",  "Bond to destroy"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4849,10 +4936,10 @@ let bond_destroy = call
 let bond_set_mode = call
 	~name:"set_mode"
 	~doc:"Change the bond mode"
-	~params:[
-		Ref _bond, "self", "The bond";
-		bond_mode, "value", "The new bond mode";
-	]
+	~params:(make_params [
+		Ref _bond, "self",  "The bond";
+		bond_mode, "value",  "The new bond mode";
+	])
 	~lifecycle:[Published, rel_boston, ""]
 	~allowed_roles:_R_POOL_OP
 	()
@@ -4860,11 +4947,11 @@ let bond_set_mode = call
 let bond_set_property = call
 	~name:"set_property"
 	~doc:"Set the value of a property of the bond"
-	~params:[
-		Ref _bond, "self", "The bond";
-		String, "name", "The property name";
-		String, "value", "The property value";
-	]
+	~params:(make_params [
+		Ref _bond, "self",  "The bond";
+		String, "name",  "The property name";
+		String, "value",  "The property value";
+	])
 	~in_product_since:rel_tampa
 	~allowed_roles:_R_POOL_OP
 	()
@@ -4888,9 +4975,9 @@ let bond =
 let vlan_create = call
   ~name:"create"
   ~doc:"Create a VLAN mux/demuxer"
-  ~params:[ Ref _pif, "tagged_PIF", "PIF which receives the tagged traffic";
-	    Int, "tag", "VLAN tag to use";
-	    Ref _network, "network", "Network to receive the untagged traffic" ]
+  ~params:(make_params [ Ref _pif, "tagged_PIF",  "PIF which receives the tagged traffic";
+	    Int, "tag",  "VLAN tag to use";
+	    Ref _network, "network",  "Network to receive the untagged traffic" ])
   ~result:(Ref _vlan, "The reference of the created VLAN object")
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
@@ -4899,7 +4986,7 @@ let vlan_create = call
 let vlan_destroy = call
   ~name:"destroy"
   ~doc:"Destroy a VLAN mux/demuxer"
-  ~params:[Ref _vlan, "self", "VLAN mux/demuxer to destroy"]
+  ~params:(make_params [Ref _vlan, "self",  "VLAN mux/demuxer to destroy"])
   ~in_product_since:rel_miami
   ~allowed_roles:_R_POOL_OP
   ()
@@ -4921,8 +5008,8 @@ let vlan =
 let tunnel_create = call
 	~name:"create"
 	~doc:"Create a tunnel"
-	~params:[ Ref _pif, "transport_PIF", "PIF which receives the tagged traffic";
-		Ref _network, "network", "Network to receive the tunnelled traffic" ]
+	~params:(make_params [ Ref _pif, "transport_PIF",  "PIF which receives the tagged traffic";
+		Ref _network, "network",  "Network to receive the tunnelled traffic" ])
 	~result:(Ref _tunnel, "The reference of the created tunnel object")
 	~lifecycle:[Published, rel_cowley, "Create a tunnel"]
 	~allowed_roles:_R_POOL_OP
@@ -4932,7 +5019,7 @@ let tunnel_create = call
 let tunnel_destroy = call
 	~name:"destroy"
 	~doc:"Destroy a tunnel"
-	~params:[Ref _tunnel, "self", "tunnel to destroy"]
+	~params:(make_params [Ref _tunnel, "self",  "tunnel to destroy"])
 	~lifecycle:[Published, rel_cowley, "Destroy a tunnel"]
 	~allowed_roles:_R_POOL_OP
 	()
@@ -4955,8 +5042,8 @@ let pbd_set_device_config = call
    ~name:"set_device_config"
    ~in_oss_since:None
    ~in_product_since:rel_miami
-   ~params:[Ref _pbd, "self", "The PBD to modify";
-	    Map(String, String), "value", "The new value of the PBD's device_config"]
+   ~params:(make_params [Ref _pbd, "self",  "The PBD to modify";
+	    Map(String, String), "value", "The new value of the PBD's device_config"])
    ~doc:"Sets the PBD's device_config field"
   ~allowed_roles:_R_POOL_OP
    ()
@@ -4994,7 +5081,7 @@ let vif_plug = call
   ~name:"plug"
   ~in_product_since:rel_rio
   ~doc:"Hotplug the specified VIF, dynamically attaching it to the running VM"
-  ~params:[Ref _vif, "self", "The VIF to hotplug"]
+  ~params:(make_params [Ref _vif, "self",  "The VIF to hotplug"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -5002,7 +5089,7 @@ let vif_unplug = call
   ~name:"unplug"
   ~in_product_since:rel_rio
   ~doc:"Hot-unplug the specified VIF, dynamically unattaching it from the running VM"
-  ~params:[Ref _vif, "self", "The VIF to hot-unplug"]
+  ~params:(make_params [Ref _vif, "self",  "The VIF to hot-unplug"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -5010,7 +5097,7 @@ let vif_unplug_force = call
   ~name:"unplug_force"
   ~in_product_since:rel_boston
   ~doc:"Forcibly unplug the specified VIF"
-  ~params:[Ref _vif, "self", "The VIF to forcibly unplug"]
+  ~params:(make_params [Ref _vif, "self",  "The VIF to forcibly unplug"])
   ~allowed_roles:_R_VM_ADMIN
   ()
 
@@ -5033,10 +5120,10 @@ let vif_set_locking_mode = call
 	~name:"set_locking_mode"
 	~in_product_since:rel_tampa
 	~doc:"Set the locking mode for this VIF"
-	~params:[
-		Ref _vif, "self", "The VIF whose locking mode will be set";
-		vif_locking_mode, "value", "The new locking mode for the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF whose locking mode will be set";
+		vif_locking_mode, "value",  "The new locking mode for the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5044,10 +5131,10 @@ let vif_set_ipv4_allowed = call
 	~name:"set_ipv4_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Set the IPv4 addresses to which traffic on this VIF can be restricted"
-	~params:[
-		Ref _vif, "self", "The VIF which the IP addresses will be associated with";
-		Set String, "value", "The IP addresses which will be associated with the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF which the IP addresses will be associated with";
+		Set String, "value",  "The IP addresses which will be associated with the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5055,10 +5142,10 @@ let vif_add_ipv4_allowed = call
 	~name:"add_ipv4_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Associates an IPv4 address with this VIF"
-	~params:[
-		Ref _vif, "self", "The VIF which the IP address will be associated with";
-		String, "value", "The IP address which will be associated with the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF which the IP address will be associated with";
+		String, "value",  "The IP address which will be associated with the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5066,10 +5153,10 @@ let vif_remove_ipv4_allowed = call
 	~name:"remove_ipv4_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Removes an IPv4 address from this VIF"
-	~params:[
-		Ref _vif, "self", "The VIF from which the IP address will be removed";
-		String, "value", "The IP address which will be removed from the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF from which the IP address will be removed";
+		String, "value",  "The IP address which will be removed from the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5077,10 +5164,10 @@ let vif_set_ipv6_allowed = call
 	~name:"set_ipv6_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Set the IPv6 addresses to which traffic on this VIF can be restricted"
-	~params:[
-		Ref _vif, "self", "The VIF which the IP addresses will be associated with";
-		Set String, "value", "The IP addresses which will be associated with the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF which the IP addresses will be associated with";
+		Set String, "value",  "The IP addresses which will be associated with the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5088,10 +5175,10 @@ let vif_add_ipv6_allowed = call
 	~name:"add_ipv6_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Associates an IPv6 address with this VIF"
-	~params:[
-		Ref _vif, "self", "The VIF which the IP address will be associated with";
-		String, "value", "The IP address which will be associated with the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF which the IP address will be associated with";
+		String, "value",  "The IP address which will be associated with the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5099,10 +5186,10 @@ let vif_remove_ipv6_allowed = call
 	~name:"remove_ipv6_allowed"
 	~in_product_since:rel_tampa
 	~doc:"Removes an IPv6 address from this VIF"
-	~params:[
-		Ref _vif, "self", "The VIF from which the IP address will be removed";
-		String, "value", "The IP address which will be removed from the VIF";
-	]
+	~params:(make_params [
+		Ref _vif, "self",  "The VIF from which the IP address will be removed";
+		String, "value",  "The IP address which will be removed from the VIF";
+	])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5184,8 +5271,8 @@ let sr_set_virtual_allocation = call
    ~name:"set_virtual_allocation"
    ~in_oss_since:None
    ~in_product_since:rel_miami
-   ~params:[Ref _sr, "self", "The SR to modify";
- 	   Int, "value", "The new value of the SR's virtual_allocation"]
+   ~params:(make_params [Ref _sr, "self",  "The SR to modify";
+ 	   Int, "value",  "The new value of the SR's virtual_allocation"])
    ~flags:[`Session]
    ~doc:"Sets the SR's virtual_allocation field"
    ~allowed_roles:_R_POOL_OP
@@ -5195,8 +5282,8 @@ let sr_set_physical_size = call
    ~name:"set_physical_size"
    ~in_oss_since:None
    ~in_product_since:rel_miami
-   ~params:[Ref _sr, "self", "The SR to modify";
- 	   Int, "value", "The new value of the SR's physical_size"]
+   ~params:(make_params [Ref _sr, "self",  "The SR to modify";
+ 	   Int, "value",  "The new value of the SR's physical_size"])
    ~flags:[`Session]
    ~doc:"Sets the SR's physical_size field"
    ~allowed_roles:_R_POOL_OP
@@ -5207,8 +5294,8 @@ let sr_set_physical_utilisation = call
    ~in_oss_since:None
    ~in_product_since:rel_miami
    ~flags:[`Session]
-   ~params:[Ref _sr, "self", "The SR to modify";
- 	   Int, "value", "The new value of the SR's physical utilisation"]
+   ~params:(make_params [Ref _sr, "self",  "The SR to modify";
+ 	   Int, "value",  "The new value of the SR's physical utilisation"])
    ~doc:"Sets the SR's physical_utilisation field"
    ~allowed_roles:_R_POOL_OP
    ()
@@ -5217,7 +5304,7 @@ let sr_update = call
    ~name:"update"
    ~in_oss_since:None
    ~in_product_since:rel_symc
-   ~params:[Ref _sr, "sr", "The SR whose fields should be refreshed" ]
+   ~params:(make_params [Ref _sr, "sr",  "The SR whose fields should be refreshed" ])
    ~doc:"Refresh the fields on the SR object"
    ~allowed_roles:_R_POOL_OP
    ()
@@ -5226,7 +5313,7 @@ let sr_assert_can_host_ha_statefile = call
    ~name:"assert_can_host_ha_statefile"
    ~in_oss_since:None
    ~in_product_since:rel_orlando
-   ~params:[Ref _sr, "sr", "The SR to query" ]
+   ~params:(make_params [Ref _sr, "sr",  "The SR to query" ])
    ~doc:"Returns successfully if the given SR can host an HA statefile. Otherwise returns an error to explain why not"
    ~allowed_roles:_R_POOL_OP
    ()
@@ -5235,7 +5322,7 @@ let sr_assert_supports_database_replication = call
 	~name:"assert_supports_database_replication"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _sr, "sr", "The SR to query"]
+	~params:(make_params [Ref _sr, "sr",  "The SR to query"])
 	~doc:"Returns successfully if the given SR supports database replication. Otherwise returns an error to explain why not."
 	~allowed_roles:_R_POOL_OP
 	()
@@ -5244,7 +5331,7 @@ let sr_enable_database_replication = call
 	~name:"enable_database_replication"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _sr, "sr", "The SR to which metadata should be replicated"]
+	~params:(make_params [Ref _sr, "sr",  "The SR to which metadata should be replicated"])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5252,7 +5339,7 @@ let sr_disable_database_replication = call
 	~name:"disable_database_replication"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _sr, "sr", "The SR to which metadata should be no longer replicated"]
+	~params:(make_params [Ref _sr, "sr",  "The SR to which metadata should be no longer replicated"])
 	~allowed_roles:_R_POOL_OP
 	()
 
@@ -5301,7 +5388,7 @@ let sm_get_driver_filename = call
    ~name:"get_driver_filename"
    ~in_oss_since:None
    ~in_product_since:rel_orlando
-   ~params:[Ref _sm, "self", "The SM to query" ]
+   ~params:(make_params [Ref _sm, "self",  "The SM to query" ])
    ~result:(String, "The SM's driver_filename field")
    ~doc:"Gets the SM's driver_filename field"
    ()  
@@ -5357,26 +5444,24 @@ let vdi_type = Enum ("vdi_type", [ "system",    "a disk that may be replaced on 
 
 let vdi_introduce_params first_rel =
   [
-    {param_type=String; param_name="uuid"; param_doc="The uuid of the disk to introduce"; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="name_label"; param_doc="The name of the disk record"; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="name_description"; param_doc="The description of the disk record"; param_release=first_rel; param_default=None};
-    {param_type=Ref _sr; param_name="SR"; param_doc="The SR that the VDI is in"; param_release=first_rel; param_default=None};
-    {param_type=vdi_type; param_name="type"; param_doc="The type of the VDI"; param_release=first_rel; param_default=None};
-    {param_type=Bool; param_name="sharable"; param_doc="true if this disk may be shared"; param_release=first_rel; param_default=None};
-    {param_type=Bool; param_name="read_only"; param_doc="true if this disk may ONLY be mounted read-only"; param_release=first_rel; param_default=None};
-    {param_type=Map(String, String); param_name="other_config"; param_doc="additional configuration"; param_release=first_rel; param_default=None};
-    {param_type=String; param_name="location"; param_doc="location information"; param_release=first_rel; param_default=None};
-    {param_type=Map(String, String); param_name="xenstore_data"; param_doc="Data to insert into xenstore"; param_release=first_rel; param_default=Some (VMap [])};
-    {param_type=Map(String, String); param_name="sm_config"; param_doc="Storage-specific config"; param_release=miami_release; param_default=Some (VMap [])};
-	{param_type=Bool; param_name = "managed"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VBool true) };
-	{param_type=Int; param_name="virtual_size"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VInt 0L) };
-	{param_type=Int; param_name="physical_utilisation"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VInt 0L) };
-	{param_type=Ref _pool; param_name="metadata_of_pool"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VRef "") };
-	{param_type=Bool; param_name="is_a_snapshot"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VBool false) };
-	{param_type=DateTime; param_name="snapshot_time"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VDateTime Date.never) };
-	{param_type=Ref _vdi; param_name="snapshot_of"; param_doc = "Storage-specific config"; param_release=tampa_release; param_default = Some (VRef "") };
-
-
+    param ~name:"uuid" ~ty:(String) ~doc:"The uuid of the disk to introduce" ~release:first_rel ?default:None ();
+    param ~name:"name_label" ~ty:(String) ~doc:"The name of the disk record" ~release:first_rel ?default:None ();
+    param ~name:"name_description" ~ty:(String) ~doc:"The description of the disk record" ~release:first_rel ?default:None ();
+    param ~name:"SR" ~ty:(Ref _sr) ~doc:"The SR that the VDI is in" ~release:first_rel ?default:None ();
+    param ~name:"type" ~ty:(vdi_type) ~doc:"The type of the VDI" ~release:first_rel ?default:None ();
+    param ~name:"sharable" ~ty:(Bool) ~doc:"true if this disk may be shared" ~release:first_rel ?default:None ();
+    param ~name:"read_only" ~ty:(Bool) ~doc:"true if this disk may ONLY be mounted read-only" ~release:first_rel ?default:None ();
+    param ~name:"other_config" ~ty:(Map(String, String)) ~doc:"additional configuration" ~release:first_rel ?default:None ();
+    param ~name:"location" ~ty:(String) ~doc:"location information" ~release:first_rel ?default:None ();
+    param ~name:"xenstore_data" ~ty:(Map(String, String)) ~doc:"Data to insert into xenstore" ~release:first_rel ?default:(Some (VMap [])) ();
+    param ~name:"sm_config" ~ty:(Map(String, String)) ~doc:"Storage-specific config" ~release:miami_release ?default:(Some (VMap [])) ();
+	param ~name:"managed" ~ty:(Bool) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VBool true) ) ();
+	param ~name:"virtual_size" ~ty:(Int) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VInt 0L)) ();
+	param ~name:"physical_utilisation" ~ty:(Int) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VInt 0L)) ();
+	param ~name:"metadata_of_pool" ~ty:(Ref _pool) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VRef "")) ();
+	param ~name:"is_a_snapshot" ~ty:(Bool) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VBool false)) ();
+	param ~name:"snapshot_time" ~ty:(DateTime) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VDateTime Date.never)) ();
+	param ~name:"snapshot_of" ~ty:(Ref _vdi) ~doc:"Storage-specific config" ~release:tampa_release ?default:(Some (VRef "")) ();
   ]
 
 (* This used to be called VDI.introduce but it was always an internal call *)
@@ -5384,7 +5469,7 @@ let vdi_pool_introduce = call
   ~name:"pool_introduce"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~versioned_params:(vdi_introduce_params miami_release)
+  ~params:(vdi_introduce_params miami_release)
   ~doc:"Create a new VDI record in the database only"
   ~result:(Ref _vdi, "The ref of the newly created VDI record.")
   ~hide_from_docs:true
@@ -5396,7 +5481,7 @@ let vdi_db_introduce = { vdi_pool_introduce with msg_name = "db_introduce"; msg_
 let vdi_db_forget = call
   ~name:"db_forget"
   ~in_oss_since:None
-  ~params:[Ref _vdi, "vdi", "The VDI to forget about"]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI to forget about"])
   ~doc:"Removes a VDI record from the database"
   ~in_product_since:rel_miami
   ~allowed_roles:_R_VM_ADMIN
@@ -5405,7 +5490,7 @@ let vdi_db_forget = call
 let vdi_introduce = call
   ~name:"introduce"
   ~in_oss_since:None
-  ~versioned_params:(vdi_introduce_params rio_release)
+  ~params:(vdi_introduce_params rio_release)
   ~doc:"Create a new VDI record in the database only"
   ~result:(Ref _vdi, "The ref of the newly created VDI record.")
   ~errs:[Api_errors.sr_operation_not_supported]
@@ -5417,7 +5502,7 @@ let vdi_forget = call
   ~name:"forget"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[Ref _vdi, "vdi", "The VDI to forget about"]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI to forget about"])
   ~doc:"Removes a VDI record from the database"
   ~allowed_roles:_R_VM_ADMIN
   ()
@@ -5427,7 +5512,7 @@ let vdi_force_unlock = call
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~internal_deprecated_since:rel_miami
-  ~params:[Ref _vdi, "vdi", "The VDI to forcibly unlock"]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI to forcibly unlock"])
   ~doc:"Steals the lock on this VDI and leaves it unlocked. This function is extremely dangerous. This call is deprecated."
   ~hide_from_docs:true
   ~allowed_roles:_R_VM_ADMIN
@@ -5436,7 +5521,7 @@ let vdi_force_unlock = call
 let vdi_update = call
   ~name:"update"
   ~in_oss_since:None
-  ~params:[Ref _vdi, "vdi", "The VDI whose stats (eg size) should be updated" ]
+  ~params:(make_params [Ref _vdi, "vdi",  "The VDI whose stats (eg size) should be updated" ])
   ~doc:"Ask the storage backend to refresh the fields in the VDI object"
   ~errs:[Api_errors.sr_operation_not_supported]
   ~in_product_since:rel_symc
@@ -5463,8 +5548,8 @@ let vdi_set_missing = call
   ~name:"set_missing"
   ~in_oss_since:None
   ~in_product_since:rel_miami
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Bool, "value", "The new value of the VDI's missing field"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Bool, "value",  "The new value of the VDI's missing field"])
    ~doc:"Sets the VDI's missing field"
   ~flags:[`Session]
   ~allowed_roles:_R_VM_ADMIN
@@ -5474,8 +5559,8 @@ let vdi_set_read_only = call
    ~name:"set_read_only"
    ~in_oss_since:None
    ~in_product_since:rel_rio
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Bool, "value", "The new value of the VDI's read_only field"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Bool, "value",  "The new value of the VDI's read_only field"])
   ~flags:[`Session]
    ~doc:"Sets the VDI's read_only field"
   ~allowed_roles:_R_VM_ADMIN
@@ -5485,8 +5570,8 @@ let vdi_set_sharable = call
    ~name:"set_sharable"
    ~in_oss_since:None
    ~in_product_since:rel_george
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Bool, "value", "The new value of the VDI's sharable field"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Bool, "value",  "The new value of the VDI's sharable field"])
   ~flags:[`Session]
    ~doc:"Sets the VDI's sharable field"
   ~allowed_roles:_R_VM_ADMIN
@@ -5496,8 +5581,8 @@ let vdi_set_managed = call
    ~name:"set_managed"
    ~in_oss_since:None
 	 ~in_product_since:rel_rio
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Bool, "value", "The new value of the VDI's managed field"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Bool, "value",  "The new value of the VDI's managed field"])
   ~flags:[`Session]
    ~doc:"Sets the VDI's managed field"
   ~allowed_roles:_R_VM_ADMIN
@@ -5507,8 +5592,8 @@ let vdi_set_virtual_size = call
    ~name:"set_virtual_size"
    ~in_oss_since:None
    ~in_product_since:rel_miami
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Int, "value", "The new value of the VDI's virtual size"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Int, "value",  "The new value of the VDI's virtual size"])
   ~flags:[`Session]
    ~doc:"Sets the VDI's virtual_size field"
   ~allowed_roles:_R_VM_ADMIN
@@ -5518,8 +5603,8 @@ let vdi_set_physical_utilisation = call
    ~name:"set_physical_utilisation"
    ~in_oss_since:None
    ~in_product_since:rel_miami
-   ~params:[Ref _vdi, "self", "The VDI to modify";
- 	   Int, "value", "The new value of the VDI's physical utilisation"]
+   ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+ 	   Int, "value",  "The new value of the VDI's physical utilisation"])
   ~flags:[`Session]
    ~doc:"Sets the VDI's physical_utilisation field"
   ~allowed_roles:_R_VM_ADMIN
@@ -5529,8 +5614,8 @@ let vdi_set_is_a_snapshot = call
 	~name:"set_is_a_snapshot"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI to modify";
-		Bool, "value", "The new value indicating whether this VDI is a snapshot"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+		Bool, "value",  "The new value indicating whether this VDI is a snapshot"])
 	~flags:[`Session]
 	~doc:"Sets whether this VDI is a snapshot"
 	~allowed_roles:_R_VM_ADMIN
@@ -5540,8 +5625,8 @@ let vdi_set_snapshot_of = call
 	~name:"set_snapshot_of"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI to modify";
-		Ref _vdi, "value", "The VDI of which this VDI is a snapshot"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+		Ref _vdi, "value",  "The VDI of which this VDI is a snapshot"])
 	~flags:[`Session]
 	~doc:"Sets the VDI of which this VDI is a snapshot"
 	~allowed_roles:_R_VM_ADMIN
@@ -5551,8 +5636,8 @@ let vdi_set_snapshot_time = call
 	~name:"set_snapshot_time"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI to modify";
-		DateTime, "value", "The snapshot time of this VDI."]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+		DateTime, "value",  "The snapshot time of this VDI."])
 	~flags:[`Session]
 	~doc:"Sets the snapshot time of this VDI."
 	~allowed_roles:_R_VM_ADMIN
@@ -5562,8 +5647,8 @@ let vdi_set_metadata_of_pool = call
 	~name:"set_metadata_of_pool"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI to modify";
-		Ref _pool, "value", "The pool whose metadata is contained by this VDI"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+		Ref _pool, "value",  "The pool whose metadata is contained by this VDI"])
 	~flags:[`Session]
 	~doc:"Records the pool whose metadata is contained by this VDI."
 	~allowed_roles:_R_VM_ADMIN
@@ -5574,8 +5659,8 @@ let vdi_generate_config = call
    ~name:"generate_config"
    ~in_oss_since:None
    ~in_product_since:rel_orlando
-   ~params:[Ref _host, "host", "The host on which to generate the configuration";
-	    Ref _vdi, "vdi", "The VDI to generate the configuration for" ]
+   ~params:(make_params [Ref _host, "host",  "The host on which to generate the configuration";
+	    Ref _vdi, "vdi",  "The VDI to generate the configuration for" ])
    ~result:(String, "The generated static configuration")
    ~doc:"Internal function for debugging only"
    ~hide_from_docs:true
@@ -5591,8 +5676,8 @@ let vdi_set_on_boot = call
 	 ~name:"set_on_boot"
 	 ~in_oss_since:None
 	 ~in_product_since:rel_cowley
-	 ~params:[Ref _vdi, "self", "The VDI to modify";
-	          on_boot, "value", "The value to set"]
+	 ~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+	          on_boot, "value",  "The value to set"])
 	 ~doc:"Set the value of the on_boot parameter. This value can only be changed when the VDI is not attached to a running VM."
 	 ~allowed_roles:_R_VM_ADMIN
 	 ()
@@ -5601,8 +5686,8 @@ let vdi_set_allow_caching = call
 	~name:"set_allow_caching"
 	~in_oss_since:None
 	~in_product_since:rel_cowley
-	~params:[Ref _vdi, "self", "The VDI to modify";
-	         Bool, "value", "The value to set"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+	         Bool, "value",  "The value to set"])
 	~doc:"Set the value of the allow_caching parameter. This value can only be changed when the VDI is not attached to a running VM. The caching behaviour is only affected by this flag for VHD-based VDIs that have one parent and no child VHDs. Moreover, caching only takes place when the host running the VM containing this VDI has a nominated SR for local caching."
 	~allowed_roles:_R_VM_ADMIN
 	()
@@ -5611,8 +5696,8 @@ let vdi_set_name_label = call
 	~name:"set_name_label"
 	~in_oss_since:None
 	~in_product_since:rel_rio
-	~params:[Ref _vdi, "self", "The VDI to modify";
-	         String, "value", "The name lable for the VDI"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+	         String, "value",  "The name lable for the VDI"])
 	~doc:"Set the name label of the VDI. This can only happen when then its SR is currently attached."
 	~allowed_roles:_R_VM_ADMIN
 	()
@@ -5621,8 +5706,8 @@ let vdi_set_name_description = call
 	~name:"set_name_description"
 	~in_oss_since:None
 	~in_product_since:rel_rio
-	~params:[Ref _vdi, "self", "The VDI to modify";
-	         String, "value", "The name description for the VDI"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to modify";
+	         String, "value",  "The name description for the VDI"])
 	~doc:"Set the name description of the VDI. This can only happen when its SR is currently attached."
 	~allowed_roles:_R_VM_ADMIN
 	()
@@ -5631,7 +5716,7 @@ let vdi_open_database = call
 	~name:"open_database"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI which contains the database to open"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI which contains the database to open"])
 	~result:(Ref _session, "A session which can be used to query the database")
 	~doc:"Load the metadata found on the supplied VDI and return a session reference which can be used in XenAPI calls to query its contents."
 	~allowed_roles:_R_POOL_OP
@@ -5641,7 +5726,7 @@ let vdi_checksum = call
 	~name:"checksum"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The VDI to checksum"]
+	~params:(make_params [Ref _vdi, "self",  "The VDI to checksum"])
 	~result:(String, "The md5sum of the vdi")
 	~doc:"Internal function to calculate VDI checksum and return a string"
 	~hide_from_docs:true
@@ -5655,7 +5740,7 @@ let vdi_read_database_pool_uuid = call
 	~name:"read_database_pool_uuid"
 	~in_oss_since:None
 	~in_product_since:rel_boston
-	~params:[Ref _vdi, "self", "The metadata VDI to look up in the cache."]
+	~params:(make_params [Ref _vdi, "self",  "The metadata VDI to look up in the cache."])
 	~result:(String, "The cached pool UUID of the database on the VDI.")
 	~doc:"Check the VDI cache for the pool UUID of the database on this VDI."
 	~allowed_roles:_R_READ_ONLY
@@ -5797,7 +5882,7 @@ let crashdump_destroy = call
   ~name:"destroy"
   ~in_product_since:rel_rio
   ~doc:"Destroy the specified crashdump"
-  ~params:[Ref _crashdump, "self", "The crashdump to destroy"]
+  ~params:(make_params [Ref _crashdump, "self",  "The crashdump to destroy"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -5821,9 +5906,17 @@ let pool_enable_ha = call
   ~in_product_since:rel_miami
   ~name:"enable_ha"
   ~in_oss_since:None
-  ~params:[
-    Set(Ref _sr), "heartbeat_srs", "Set of SRs to use for storage heartbeating.";
-    Map(String, String), "configuration", "Detailed HA configuration to apply"]
+  ~params:(make_params [
+    Set(Ref _sr), "heartbeat_srs",  "Set of SRs to use for storage heartbeating."] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"configuration"
+			~doc:"Detailed HA configuration to apply"
+			~map_keys:[
+				"timeout", "Pool HA timeout";
+			]
+			()
+		])
   ~doc:"Turn on High Availability mode"
   ~allowed_roles:_R_POOL_OP
   ()
@@ -5832,7 +5925,7 @@ let pool_disable_ha = call
   ~in_product_since:rel_miami
   ~name:"disable_ha"
   ~in_oss_since:None
-  ~params:[]
+  ~params:(make_params [])
   ~doc:"Turn off High Availability mode"
   ~allowed_roles:_R_POOL_OP
   ()
@@ -5841,7 +5934,7 @@ let pool_sync_database = call
   ~name:"sync_database"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[]
+  ~params:(make_params [])
   ~doc:"Forcibly synchronise the database now"
   ~allowed_roles:_R_POOL_OP
   ()
@@ -5850,7 +5943,7 @@ let pool_designate_new_master = call
   ~in_product_since:rel_miami
   ~name:"designate_new_master"
   ~in_oss_since:None
-  ~params:[Ref _host, "host", "The host who should become the new master"]
+  ~params:(make_params [Ref _host, "host",  "The host who should become the new master"])
   ~doc:"Perform an orderly handover of the role of master to the referenced host."
   ~allowed_roles:_R_POOL_OP
   ()
@@ -5859,10 +5952,10 @@ let pool_join = call
   ~name:"join"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[String, "master_address", "The hostname of the master of the pool to join";
-	   String, "master_username", "The username of the master (for initial authentication)";
-	   String, "master_password", "The password for the master (for initial authentication)";
-	  ]
+  ~params:(make_params [String, "master_address",  "The hostname of the master of the pool to join";
+	   String, "master_username",  "The username of the master (for initial authentication)";
+	   String, "master_password",  "The password for the master (for initial authentication)";
+	  ])
   ~errs:[Api_errors.pool_joining_host_cannot_contain_shared_SRs]
   ~doc:"Instruct host to join a new pool"
   ~allowed_roles:_R_POOL_OP
@@ -5872,10 +5965,10 @@ let pool_join_force = call
   ~name:"join_force"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[String, "master_address", "The hostname of the master of the pool to join";
-	   String, "master_username", "The username of the master (for initial authentication)";
-	   String, "master_password", "The password for the master (for initial authentication)";
-	  ]
+  ~params:(make_params [String, "master_address",  "The hostname of the master of the pool to join";
+	   String, "master_username",  "The username of the master (for initial authentication)";
+	   String, "master_password",  "The password for the master (for initial authentication)";
+	  ])
   ~doc:"Instruct host to join a new pool"
   ~allowed_roles:_R_POOL_OP
     ()
@@ -5885,9 +5978,9 @@ let pool_slave_reset_master = call ~flags:[`Session]
   ~name:"emergency_reset_master"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[
-	    String, "master_address", "The hostname of the master";
-	  ]
+  ~params:(make_params [
+	    String, "master_address",  "The hostname of the master";
+	  ])
   ~doc:"Instruct a slave already in a pool that the master has changed"
   ~allowed_roles:_R_POOL_OP
     ()
@@ -5896,7 +5989,7 @@ let pool_transition_to_master = call ~flags:[`Session]
   ~name:"emergency_transition_to_master"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[]
+  ~params:(make_params [])
   ~doc:"Instruct host that's currently a slave to transition to being master"
   ~allowed_roles:_R_POOL_OP
     ()
@@ -5905,7 +5998,7 @@ let pool_recover_slaves = call
   ~name:"recover_slaves"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Set (Ref _host), "list of hosts whose master address were successfully reset")
   ~doc:"Instruct a pool master, M, to try and contact its slaves and, if slaves are in emergency mode, reset their master address to M."
   ~allowed_roles:_R_POOL_OP
@@ -5915,7 +6008,7 @@ let pool_eject = call
   ~name:"eject"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[Ref _host, "host", "The host to eject"]
+  ~params:(make_params [Ref _host, "host",  "The host to eject"])
   ~doc:"Instruct a pool master to eject a host from the pool"
   ~allowed_roles:_R_POOL_OP
     ()
@@ -5924,7 +6017,7 @@ let pool_initial_auth = call
   ~name:"initial_auth"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[]
+  ~params:(make_params [])
   ~result:(String, "")
   ~doc:"Internal use only"
   ~hide_from_docs:true
@@ -5936,9 +6029,9 @@ let pool_create_VLAN_from_PIF = call
   ~in_product_since:rel_rio
   ~name:"create_VLAN_from_PIF"
   ~doc:"Create a pool-wide VLAN by taking the PIF."
-  ~params:[Ref _pif, "pif", "physical interface on any particular host, that identifies the PIF on which to create the (pool-wide) VLAN interface";
-	   Ref _network, "network", "network to which this interface should be connected";
-	   Int, "VLAN", "VLAN tag for the new interface"]
+  ~params:(make_params [Ref _pif, "pif",  "physical interface on any particular host, that identifies the PIF on which to create the (pool-wide) VLAN interface";
+	   Ref _network, "network",  "network to which this interface should be connected";
+	   Int, "VLAN",  "VLAN tag for the new interface"])
   ~result:(Set (Ref _pif), "The references of the created PIF objects")
   ~errs:[Api_errors.vlan_tag_invalid]
   ~allowed_roles:_R_POOL_OP
@@ -5951,9 +6044,9 @@ let pool_create_VLAN = call
   ~in_product_since:rel_rio
   ~name:"create_VLAN"
   ~doc:"Create PIFs, mapping a network to the same physical interface/VLAN on each host. This call is deprecated: use Pool.create_VLAN_from_PIF instead."
-  ~params:[String, "device", "physical interface on which to create the VLAN interface";
-	   Ref _network, "network", "network to which this interface should be connected";
-	   Int, "VLAN", "VLAN tag for the new interface"]
+  ~params:(make_params [String, "device",  "physical interface on which to create the VLAN interface";
+	   Ref _network, "network",  "network to which this interface should be connected";
+	   Int, "VLAN",  "VLAN tag for the new interface"])
   ~result:(Set (Ref _pif), "The references of the created PIF objects")
   ~errs:[Api_errors.vlan_tag_invalid]
   ~allowed_roles:_R_POOL_OP
@@ -5970,9 +6063,9 @@ let pool_hello = call
   ~name:"hello"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[String, "host_uuid", "";
-	   String, "host_address", ""
-	  ]
+  ~params:(make_params [String, "host_uuid",  "";
+	   String, "host_address",  ""
+	  ])
   ~result:(hello_return, "")
   ~doc:"Internal use only"
   ~hide_from_docs:true
@@ -5984,11 +6077,11 @@ let pool_slave_network_report = call
   ~in_oss_since:None
   ~in_product_since:rel_rio
   ~doc:"Internal use only"
-  ~params:[Map (String, String), "phydevs", "(device,bridge) pairs of physical NICs on slave";
-	   Map (String, String), "dev_to_mac", "(device,mac) pairs of physical NICs on slave";
-	   Map (String, Int), "dev_to_mtu", "(device,mtu) pairs of physical NICs on slave";
-	   Ref _host, "slave_host", "the host that the PIFs will be attached to when created"
-	  ]
+  ~params:(make_params [Map (String, String), "phydevs",  "(device,bridge) pairs of physical NICs on slave";
+	   Map (String, String), "dev_to_mac",  "(device,mac) pairs of physical NICs on slave";
+	   Map (String, Int), "dev_to_mtu",  "(device,mtu) pairs of physical NICs on slave";
+	   Ref _host, "slave_host",  "the host that the PIFs will be attached to when created"
+	  ])
   ~result:(Set(Ref _pif), "refs for pifs corresponding to device list")
   ~hide_from_docs:true
   ~allowed_roles:_R_POOL_ADMIN
@@ -5998,7 +6091,7 @@ let pool_ping_slave = call ~flags:[`Session]
   ~name:"is_slave"
   ~in_oss_since:None
   ~in_product_since:rel_rio
-  ~params:[Ref _host, "host", ""]
+  ~params:(make_params [Ref _host, "host",  ""])
   ~doc:"Internal use only"
   ~result:(Bool, "returns false if pinged host is master [indicating critical error condition]; true if pinged host is slave")
   ~hide_from_docs:true
@@ -6009,7 +6102,7 @@ let pool_ha_prevent_restarts_for = call ~flags:[`Session]
   ~name:"ha_prevent_restarts_for"
   ~in_product_since:rel_orlando_update_1
   ~doc:"When this call returns the VM restart logic will not run for the requested number of seconds. If the argument is zero then the restart thread is immediately unblocked"
-  ~params:[Int, "seconds", "The number of seconds to block the restart thread for"]
+  ~params:(make_params [Int, "seconds",  "The number of seconds to block the restart thread for"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6017,7 +6110,7 @@ let pool_ha_failover_plan_exists = call ~flags:[`Session]
   ~name:"ha_failover_plan_exists"
   ~in_product_since:rel_orlando
   ~doc:"Returns true if a VM failover plan exists for up to 'n' host failures"
-  ~params:[Int, "n", "The number of host failures to plan for" ]
+  ~params:(make_params [Int, "n",  "The number of host failures to plan for" ])
   ~result:(Bool, "true if a failover plan exists for the supplied number of host failures")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6026,7 +6119,7 @@ let pool_ha_compute_max_host_failures_to_tolerate = call ~flags:[`Session]
   ~name:"ha_compute_max_host_failures_to_tolerate"
   ~in_product_since:rel_orlando
   ~doc:"Returns the maximum number of host failures we could tolerate before we would be unable to restart configured VMs"
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Int, "maximum value for ha_host_failures_to_tolerate given current configuration")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6035,7 +6128,7 @@ let pool_ha_compute_hypothetical_max_host_failures_to_tolerate = call ~flags:[`S
   ~name:"ha_compute_hypothetical_max_host_failures_to_tolerate"
   ~in_product_since:rel_orlando
   ~doc:"Returns the maximum number of host failures we could tolerate before we would be unable to restart the provided VMs"
-  ~params:[ Map(Ref _vm, String), "configuration", "Map of protected VM reference to restart priority" ]
+  ~params:(make_params [ Map(Ref _vm, String), "configuration",  "Map of protected VM reference to restart priority" ])
   ~result:(Int, "maximum value for ha_host_failures_to_tolerate given provided configuration")
   ~allowed_roles:_R_READ_ONLY
   ()
@@ -6044,8 +6137,8 @@ let pool_ha_compute_vm_failover_plan = call ~flags:[`Session]
   ~name:"ha_compute_vm_failover_plan"
   ~in_product_since:rel_orlando
   ~doc:"Return a VM failover plan assuming a given subset of hosts fail"
-  ~params:[Set(Ref _host), "failed_hosts", "The set of hosts to assume have failed";
-	   Set(Ref _vm), "failed_vms", "The set of VMs to restart" ]
+  ~params:(make_params [Set(Ref _host), "failed_hosts",  "The set of hosts to assume have failed";
+	   Set(Ref _vm), "failed_vms",  "The set of VMs to restart" ])
   ~result:(Map(Ref _vm, Map(String, String)), "VM failover plan: a map of VM to host to restart the host on")
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6054,11 +6147,11 @@ let pool_create_new_blob = call
   ~name: "create_new_blob"
   ~in_product_since:rel_orlando
   ~doc:"Create a placeholder for a named binary blob of data that is associated with this pool"
-  ~versioned_params:
-  [{param_type=Ref _pool; param_name="pool"; param_doc="The pool"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="name"; param_doc="The name associated with the blob"; param_release=orlando_release; param_default=None};
-  {param_type=String; param_name="mime_type"; param_doc="The mime type for the data. Empty string translates to application/octet-stream"; param_release=orlando_release; param_default=None};
-  {param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}
+  ~params:
+  [param ~name:"pool" ~ty:(Ref _pool) ~doc:"The pool" ~release:orlando_release ?default:None ();
+  param ~name:"name" ~ty:(String) ~doc:"The name associated with the blob" ~release:orlando_release ?default:None ();
+  param ~name:"mime_type" ~ty:(String) ~doc:"The mime type for the data. Empty string translates to application/octet-stream" ~release:orlando_release ?default:None ();
+  param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()
   ]
   ~result:(Ref _blob, "The reference of the blob, needed for populating its data")
   ~allowed_roles:_R_POOL_OP
@@ -6068,8 +6161,8 @@ let pool_set_ha_host_failures_to_tolerate = call
   ~name:"set_ha_host_failures_to_tolerate"
   ~in_product_since:rel_orlando
   ~doc:"Set the maximum number of host failures to consider in the HA VM restart planner"
-  ~params:[Ref _pool, "self", "The pool";
-	   Int, "value", "New number of host failures to consider"]
+  ~params:(make_params [Ref _pool, "self",  "The pool";
+	   Int, "value",  "New number of host failures to consider"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6077,7 +6170,7 @@ let pool_ha_schedule_plan_recomputation = call
   ~name:"ha_schedule_plan_recomputation"
   ~in_product_since:rel_orlando
   ~doc:"Signal that the plan should be recomputed (eg a host has come online)"
-  ~params:[]
+  ~params:(make_params [])
   ~hide_from_docs:true
   ~pool_internal:true
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
@@ -6088,7 +6181,7 @@ let pool_enable_binary_storage = call
   ~in_product_since:rel_orlando
   ~hide_from_docs:true
   ~doc:"Enable the storage of larger objects, such as RRDs, messages and binary blobs across all hosts in the pool"
-  ~params:[]
+  ~params:(make_params [])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6097,7 +6190,7 @@ let pool_disable_binary_storage = call
   ~in_product_since:rel_orlando
   ~hide_from_docs:true
   ~doc:"Disable the storage of larger objects, such as RRDs, messages and binary blobs across all hosts in the pool. This will destroy all of these objects where they exist."
-  ~params:[]
+  ~params:(make_params [])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6105,12 +6198,24 @@ let pool_enable_external_auth = call ~flags:[`Session]
   ~name:"enable_external_auth"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
-    Ref _pool, "pool", "The pool whose external authentication should be enabled"; 
-    Map (String,String), "config", "A list of key-values containing the configuration data" ; 
-    String, "service_name", "The name of the service" ; 
-    String, "auth_type", "The type of authentication (e.g. AD for Active Directory)" 
-    ]
+  ~params:(make_params [
+    Ref _pool, "pool",  "The pool whose external authentication should be enabled"] @ [
+		param
+			~ty:(Map(String, String))
+			~name:"config"
+			~doc:"A list of key-values containing the configuration data"
+			~map_keys:[
+				"user", "domain user name, only for AD auth type"; 
+				"pass", "domain user password, only for AD auth type";
+				"domian", "domain name, only for AD auth type";
+				"ou", "domain organizational unit, only for AD auth type";
+				"disable_modules", "--disable arguments for domainjoin-cli, only for AD auth type";
+			]
+			()
+		] @ (make_params [
+    String, "service_name",  "The name of the service" ; 
+    String, "auth_type",  "The type of authentication (e.g. AD for Active Directory)" 
+    ]))
   ~doc:"This call enables external authentication on all the hosts of the pool"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -6119,9 +6224,9 @@ let pool_disable_external_auth = call ~flags:[`Session]
   ~name:"disable_external_auth"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~versioned_params:[
-    {param_type=Ref _pool; param_name="pool"; param_doc="The pool whose external authentication should be disabled"; param_release=george_release; param_default=None};
-    {param_type=Map (String, String); param_name="config"; param_doc="Optional parameters as a list of key-values containing the configuration data"; param_release=george_release; param_default=Some (VMap [])}
+  ~params:[
+    param ~name:"pool" ~ty:(Ref _pool) ~doc:"The pool whose external authentication should be disabled" ~release:george_release ?default:None ();
+    param ~name:"config" ~ty:(Map (String, String)) ~doc:"Optional parameters as a list of key-values containing the configuration data" ~release:george_release ?default:(Some (VMap [])) ()
     ]
   ~doc:"This call disables external authentication on all the hosts of the pool"
   ~allowed_roles:_R_POOL_ADMIN
@@ -6131,9 +6236,9 @@ let pool_detect_nonhomogeneous_external_auth = call ~flags:[`Session]
   ~name:"detect_nonhomogeneous_external_auth"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
-    Ref _pool, "pool", "The pool where to detect non-homogeneous external authentication configuration"; 
-    ]
+  ~params:(make_params [
+    Ref _pool, "pool",  "The pool where to detect non-homogeneous external authentication configuration"; 
+    ])
   ~doc:"This call asynchronously detects if the external authentication configuration in any slave is different from that in the master and raises appropriate alerts"
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6142,11 +6247,11 @@ let pool_initialize_wlb = call
   ~name:"initialize_wlb"
   ~in_product_since:rel_george
   ~doc:"Initializes workload balancing monitoring on this pool with the specified wlb server"
-  ~params:[String, "wlb_url", "The ip address and port to use when accessing the wlb server";
-    String, "wlb_username", "The username used to authenticate with the wlb server";
-    String, "wlb_password", "The password used to authenticate with the wlb server";
-    String, "xenserver_username", "The usernamed used by the wlb server to authenticate with the xenserver";
-    String, "xenserver_password", "The password used by the wlb server to authenticate with the xenserver"]
+  ~params:(make_params [String, "wlb_url",  "The ip address and port to use when accessing the wlb server";
+    String, "wlb_username",  "The username used to authenticate with the wlb server";
+    String, "wlb_password",  "The password used to authenticate with the wlb server";
+    String, "xenserver_username",  "The usernamed used by the wlb server to authenticate with the xenserver";
+    String, "xenserver_password",  "The password used by the wlb server to authenticate with the xenserver"])
   ~allowed_roles:_R_POOL_OP
    ()
 
@@ -6154,7 +6259,7 @@ let pool_deconfigure_wlb = call
   ~name:"deconfigure_wlb"
   ~in_product_since:rel_george
   ~doc:"Permanently deconfigures workload balancing monitoring on this pool"
-  ~params:[]
+  ~params:(make_params [])
   ~allowed_roles:_R_POOL_OP
    ()
 
@@ -6162,15 +6267,145 @@ let pool_send_wlb_configuration = call
   ~name:"send_wlb_configuration"
   ~in_product_since:rel_george
   ~doc:"Sets the pool optimization criteria for the workload balancing server"
-  ~params:[Map(String, String), "config", "The configuration to use in optimizing this pool"]
+  ~params:[
+		param
+			~ty:(Map(String, String))
+			~name:"config"
+			~doc:"The configuration to use in optimizing this pool"
+			~map_keys:[
+				"HostCpuThresholdCritical", "WLB Host Cpu Critical Threshold";
+				"HostCpuThresholdHigh", "WLB Host Cpu High Threshold";
+				"HostCpuThresholdMedium", "WLB Host Cpu Medium Threshold";
+				"HostCpuThresholdLow", "WLB Host Cpu Low Threshold";
+				"HostMemoryThresholdCritical", "WLB Host Memory Critical Threshold";
+				"HostMemoryThresholdHigh", "WLB Host Memory High Threshold";
+				"HostMemoryThresholdMedium", "WLB Host Memory Medium Threshold";
+				"HostMemoryThresholdLow", "WLB Host Memory Low Threshold";
+				"HostPifReadThresholdCritical", "WLB Host Pif Read Critical Threshold";
+				"HostPifReadThresholdHigh", "WLB Host Pif Read High Threshold";
+				"HostPifReadThresholdMedium", "WLB Host Pif Read Medium Threshold";
+				"HostPifReadThresholdLow", "WLB Host Pif Read Low Threshold";
+				"HostPifWriteThresholdCritical", "WLB Host Pif Write Critical Threshold";
+				"HostPifWriteThresholdHigh", "WLB Host Pif Write High Threshold";
+				"HostPifWriteThresholdMedium", "WLB Host Pif Write Medium Threshold";
+				"HostPifWriteThresholdLow", "WLB Host Pif Write Low Threshold";
+				"HostPbdReadThresholdCritical", "WLB Host Pbd Read Critical Threshold";
+				"HostPbdReadThresholdHigh", "WLB Host Pbd Read High Threshold";
+				"HostPbdReadThresholdMedium", "WLB Host Pbd Read Medium Threshold";
+				"HostPbdReadThresholdLow", "WLB Host Pbd Read Low Threshold";
+				"HostPbdWriteThresholdCritical", "WLB Host Pbd Write Critical Threshold";
+				"HostPbdWriteThresholdHigh", "WLB Host Pbd Write High Threshold";
+				"HostPbdWriteThresholdMedium", "WLB Host Pbd Write Medium Threshold";
+				"HostPbdWriteThresholdLow", "WLB Host Pbd Write Low Threshold";
+				"HostLoadAverageThresholdCritical", "WLB Host Load Average Critical Threshold";
+				"HostLoadAverageThresholdHigh", "WLB Host Load Average High Threshold";
+				"HostLoadAverageThresholdMedium", "WLB Host Load Average Medium Threshold";
+				"HostLoadAverageThresholdLow", "WLB Host Load Average Low Threshold";
+				"WeightCurrentMetrics", "WLB Current Metrics Weight";
+				"WeightRecentMetrics", "WLB Recent Metrics Weight";
+				"WeightHistoricalMetrics", "WLB Historical Metrics Weight";
+				"VmCpuUtilizationThresholdHigh", "WLB Vm Cpu Utilization High Threshold";
+				"VmCpuUtilizationThresholdMedium", "WLB Vm Cpu Utilization Medium Threshold";
+				"VmCpuUtilizationThresholdLow", "WLB Vm Cpu Utilization Low Threshold";
+				"VmCpuUtilizationWeightHigh", "WLB Vm Cpu Utilization High Weight";
+				"VmCpuUtilizationWeightMedium", "WLB Vm Cpu Utilization Medium Weight";
+				"VmCpuUtilizationWeightLow", "WLB Vm Cpu Utilization Low Weight";
+				"VmMemoryThresholdHigh", "WLB Vm Memory High Threshold";
+				"VmMemoryThresholdMedium", "WLB Vm Memory Medium Threshold";
+				"VmMemoryThresholdLow", "WLB Vm Memory Low Threshold";
+				"VmMemoryWeightHigh", "WLB Vm Memory High Weight";
+				"VmMemoryWeightMedium", "WLB Vm Memory Medium Weight";
+				"VmMemoryWeightLow", "WLB Vm Memory Low Weight";
+				"VmNetworkReadThresholdHigh", "WLB Vm Network Read High Threshold";
+				"VmNetworkReadThresholdMedium", "WLB Vm Network Read Medium Threshold";
+				"VmNetworkReadThresholdLow", "WLB Vm Network Read Low Threshold";
+				"VmNetworkReadWeightHigh", "WLB Vm Network Read High Weight";
+				"VmNetworkReadWeightMedium", "WLB Vm Network Read Medium Weight";
+				"VmNetworkReadWeightLow", "WLB Vm Network Read Low Weight";
+				"VmNetworkWriteThresholdHigh", "WLB Vm Network Write High Threshold";
+				"VmNetworkWriteThresholdMedium", "WLB Vm Network Write Medium Threshold";
+				"VmNetworkWriteThresholdLow", "WLB Vm Network Write Low Threshold";
+				"VmNetworkWriteWeightHigh", "WLB Vm Network Write High Weight";
+				"VmNetworkWriteWeightMedium", "WLB Vm Network Write Medium Weight";
+				"VmNetworkWriteWeightLow", "WLB Vm Network Write Low Weight";
+				"VmDiskReadThresholdHigh", "WLB Vm Disk Read High Threshold";
+				"VmDiskReadThresholdMedium", "WLB Vm Disk Read Medium Threshold";
+				"VmDiskReadThresholdLow", "WLB Vm Disk Read Low Threshold";
+				"VmDiskReadWeightHigh", "WLB Vm Disk Read High Weight";
+				"VmDiskReadWeightMedium", "WLB Vm Disk Read Medium Weight";
+				"VmDiskReadWeightLow", "WLB Vm Disk Read Low Weight";
+				"VmDiskWriteThresholdHigh", "WLB Vm Disk Write High Threshold";
+				"VmDiskWriteThresholdMedium", "WLB Vm Disk Write Medium Threshold";
+				"VmDiskWriteThresholdLow", "WLB Vm Disk Write Low Threshold";
+				"VmDiskWriteWeightHigh", "WLB Vm Disk Write High Weight";
+				"VmDiskWriteWeightMedium", "WLB Vm Disk Write Medium Weight";
+				"VmDiskWriteWeightLow", "WLB Vm Disk Write Low Weight";
+				"CpuHighThresholdFactor", "WLB Cpu High Factor Threshold";
+				"CpuMediumThresholdFactor", "WLB Cpu Medium Factor Threshold";
+				"CpuLowThresholdFactor", "WLB Cpu Low Factor Threshold";
+				"MemoryHighThresholdFactor", "WLB Memory High Factor Threshold";
+				"MemoryMediumThresholdFactor", "WLB Memory Medium Factor Threshold";
+				"MemoryLowThresholdFactor", "WLB Memory Low Factor Threshold";
+				"NetworkReadHighThresholdFactor", "WLB Network Read High Factor Threshold";
+				"NetworkReadMediumThresholdFactor", "WLB Network Read Medium Factor Threshold";
+				"NetworkReadLowThresholdFactor", "WLB Network Read Low Factor Threshold";
+				"NetworkWriteHighThresholdFactor", "WLB Network Write High Factor Threshold";
+				"NetworkWriteMediumThresholdFactor", "WLB Network Write Medium Factor Threshold";
+				"NetworkWriteLowThresholdFactor", "WLB Network Write Low Factor Threshold";
+				"DiskReadHighThresholdFactor", "WLB Disk Read High Factor Threshold";
+				"DiskReadMediumThresholdFactor", "WLB Disk Read Medium Factor Threshold";
+				"DiskReadLowThresholdFactor", "WLB Disk Read Low Factor Threshold";
+				"DiskWriteHighThresholdFactor", "WLB Disk Write High Factor Threshold";
+				"DiskWriteMediumThresholdFactor", "WLB Disk Write Medium Factor Threshold";
+				"DiskWriteLowThresholdFactor", "WLB Disk Write Low Factor Threshold";
+				"CpuMediumWeightFactor", "WLB Cpu Medium Factor Weight";
+				"CpuLowWeightFactor", "WLB Cpu Low Factor Weight";
+				"MemoryMediumWeightFactor", "WLB Memory Medium Factor Weight";
+				"MemoryLowWeightFactor", "WLB Memory Low Factor Weight";
+				"NetworkReadMediumWeightFactor", "WLB Network Read Medium Factor Weight";
+				"NetworkReadLowWeightFactor", "WLB Network Read Low Factor Weight";
+				"NetworkWriteMediumWeightFactor", "WLB Network Write Medium Factor Weight";
+				"NetworkWriteLowWeightFactor", "WLB Network Write Low Factor Weight";
+				"DiskReadMediumWeightFactor", "WLB Disk Read Medium Factor Weight";
+				"DiskReadLowWeightFactor", "WLB Disk Read Low Factor Weight";
+				"DiskWriteMediumWeightFactor", "WLB Disk Write Medium Factor Weight";
+				"DiskWriteLowWeightFactor", "WLB Disk Write Low Factor Weight";
+				"RecentMoveMinutes", "WLB Recent Move Minutes";
+				"UseNameMatching", "WLB Use Name Matching";
+				"NameMatchingPattern", "WLB Name Matching Pattern";
+				"AutoBalancePollIntervals", "WLB Auto Balance Poll Intervals";
+				"AutoBalanceSeverity", "WLB Auto Balance Severity";
+				"AutoBalanceAggressiveness", "WLB Auto Balance Aggressiveness";
+				"EnableOptimizationModeSchedules", "WLB Enable Optimization Mode Schedules";
+				"PowerManagementPollIntervals", "WLB Power Management Poll Intervals";
+				"HonorHAPlan", "WLB Honor H A Plan";
+				"PoolMasterCpuLimit", "WLB Pool Master Cpu Limit";
+				"PoolMasterNetIoLimit", "WLB Pool Master Net Io Limit";
+				"PreferPowerOnOverCompression", "WLB Prefer Power On Over Compression";
+				"PowerOnHostIfNoMemory", "WLB Power On Host If No Memory";
+				"PowerOnHostIfNoSR", "WLB Power On Host If No SR";
+				"CompressGuestsToRelievePressure", "WLB Compress Guests To Relieve Pressure";
+				"CompressGuestsToPreservePower", "WLB Compress Guests To Preserve Power";
+				"DefaultHostMemoryOverhead", "WLB Default Host Memory Overhead";
+				"AuditLogRetrieveBackDays", "WLB Audit Log Retrieve Back Days";
+				"RetrieveAuditLog", "WLB Retrieve Audit Log";
+				"OptimizationMode", "WLB Optimization Mode";
+				"AutoBalanceEnabled", "WLB Auto Balance Enabled";
+				"PowerManagementEnabled", "WLB Power Management Enabled";
+				"OverCommitCpuInPerfMode", "WLB Over Commit Cpu In Perf Mode";
+				"OverCommitCpuInDensityMode", "WLB Over Commit Cpu In Density Mode";
+				"OverCommitCpuRatio", "WLB Over Commit Cpu Ratio";
+			]
+			()
+	]
   ~allowed_roles:_R_POOL_OP
-   ()
+  ()
  
 let pool_retrieve_wlb_configuration = call
   ~name:"retrieve_wlb_configuration"
   ~in_product_since:rel_george
   ~doc:"Retrieves the pool optimization criteria from the workload balancing server"
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Map(String,String), "The configuration used in optimizing this pool")
   ~allowed_roles:_R_READ_ONLY
    ()
@@ -6179,7 +6414,7 @@ let pool_retrieve_wlb_recommendations = call
   ~name:"retrieve_wlb_recommendations"
   ~in_product_since:rel_george
   ~doc:"Retrieves vm migrate recommendations for the pool from the workload balancing server"
-  ~params:[]
+  ~params:(make_params [])
   ~result:(Map(Ref _vm,Set(String)), "The list of vm migration recommendations")
   ~allowed_roles:_R_READ_ONLY
    ()
@@ -6188,7 +6423,7 @@ let pool_send_test_post = call
   ~name:"send_test_post"
   ~in_product_since:rel_george
   ~doc:"Send the given body to the given host and port, using HTTPS, and print the response.  This is used for debugging the SSL layer."
-  ~params:[(String, "host", ""); (Int, "port", ""); (String, "body", "")]
+  ~params:(make_params [(String, "host",  ""); (Int, "port",  ""); (String, "body",  "")])
   ~result:(String, "The response")
   ~allowed_roles:_R_POOL_ADMIN
    ()
@@ -6198,8 +6433,8 @@ let pool_certificate_install = call
   ~in_product_since:rel_george
   ~name:"certificate_install"
   ~doc:"Install an SSL certificate pool-wide."
-  ~params:[String, "name", "A name to give the certificate";
-	   String, "cert", "The certificate"]
+  ~params:(make_params [String, "name",  "A name to give the certificate";
+	   String, "cert",  "The certificate"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6208,7 +6443,7 @@ let pool_certificate_uninstall = call
   ~in_product_since:rel_george
   ~name:"certificate_uninstall"
   ~doc:"Remove an SSL certificate."
-  ~params:[String, "name", "The certificate name"]
+  ~params:(make_params [String, "name",  "The certificate name"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6226,8 +6461,8 @@ let pool_crl_install = call
   ~in_product_since:rel_george
   ~name:"crl_install"
   ~doc:"Install an SSL certificate revocation list, pool-wide."
-  ~params:[String, "name", "A name to give the CRL";
-	   String, "cert", "The CRL"]
+  ~params:(make_params [String, "name",  "A name to give the CRL";
+	   String, "cert",  "The CRL"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6236,7 +6471,7 @@ let pool_crl_uninstall = call
   ~in_product_since:rel_george
   ~name:"crl_uninstall"
   ~doc:"Remove an SSL certificate revocation list."
-  ~params:[String, "name", "The CRL name"]
+  ~params:(make_params [String, "name",  "The CRL name"])
   ~allowed_roles:_R_POOL_OP
   ()
 
@@ -6261,7 +6496,7 @@ let pool_enable_redo_log = call
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
   ~name:"enable_redo_log"
-  ~params:[Ref _sr, "sr", "SR to hold the redo log."]
+  ~params:(make_params [Ref _sr, "sr",  "SR to hold the redo log."])
   ~doc:"Enable the redo log on the given SR and start using it, unless HA is enabled."
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6280,7 +6515,7 @@ let pool_audit_log_append = call
   ~hide_from_docs:true
 	~in_product_since:rel_midnight_ride
 	~name:"audit_log_append"
-	~params:[String, "line", "line to be appended to the audit log"]
+	~params:(make_params [String, "line",  "line to be appended to the audit log"])
 	~doc:"Append a line to the audit log on the master."
 	~allowed_roles:_R_POOL_ADMIN
 	()
@@ -6292,7 +6527,7 @@ let pool_set_vswitch_controller = call
     Published, rel_midnight_ride, "Set the IP address of the vswitch controller.";
     Extended, rel_cowley, "Allow to be set to the empty string (no controller is used)."]
   ~name:"set_vswitch_controller"
-  ~params:[String, "address", "IP address of the vswitch controller."]
+  ~params:(make_params [String, "address",  "IP address of the vswitch controller."])
   ~doc:"Set the IP address of the vswitch controller."
   ~allowed_roles:_R_POOL_OP
   ()
@@ -6301,9 +6536,9 @@ let pool_test_archive_target = call ~flags:[`Session]
   ~name:"test_archive_target"
   ~in_oss_since:None
   ~in_product_since:rel_cowley
-  ~params:[Ref _pool, "self", "Reference to the pool";
-    Map(String,String), "config", "Location config settings to test";
-  ]
+  ~params:(make_params [Ref _pool, "self",  "Reference to the pool";
+    Map(String,String), "config",  "Location config settings to test";
+  ])
   ~doc:"This call tests if a location is valid"
   ~allowed_roles:_R_POOL_OP
   ~result:(String, "An XMLRPC result")
@@ -6313,7 +6548,7 @@ let pool_enable_local_storage_caching = call
 	~name:"enable_local_storage_caching"
 	~in_oss_since:None
 	~in_product_since:rel_cowley
-	~params:[Ref _pool, "self", "Reference to the pool"]
+	~params:(make_params [Ref _pool, "self",  "Reference to the pool"])
 	~doc:"This call attempts to enable pool-wide local storage caching"
 	~allowed_roles:_R_POOL_OP
 	()
@@ -6322,7 +6557,7 @@ let pool_disable_local_storage_caching = call
 	~name:"disable_local_storage_caching"
 	~in_oss_since:None
 	~in_product_since:rel_cowley
-	~params:[Ref _pool, "self", "Reference to the pool"]
+	~params:(make_params [Ref _pool, "self",  "Reference to the pool"])
 	~doc:"This call disables pool-wide local storage caching"
 	~allowed_roles:_R_POOL_OP
 	()
@@ -6331,7 +6566,7 @@ let pool_get_license_state = call
 	~name:"get_license_state"
 	~in_oss_since:None
 	~in_product_since:rel_clearwater
-	~params:[Ref _pool, "self", "Reference to the pool"]
+	~params:(make_params [Ref _pool, "self",  "Reference to the pool"])
 	~doc:"This call returns the license state for the pool"
 	~allowed_roles:_R_READ_ONLY
 	~result:(Map(String,String), "The pool's license state")
@@ -6341,10 +6576,10 @@ let pool_apply_edition = call
 	~name:"apply_edition"
 	~in_oss_since:None
 	~in_product_since:rel_clearwater
-	~params:[
-		Ref _pool, "self", "Reference to the pool";
-		String, "edition", "The requested edition";
-	]
+	~params:(make_params [
+		Ref _pool, "self",  "Reference to the pool";
+		String, "edition",  "The requested edition";
+	])
 	~doc:"Apply an edition to all hosts in the pool"
 	~allowed_roles:_R_POOL_OP
 	()
@@ -6453,10 +6688,10 @@ let auth_get_subject_identifier = call ~flags:[`Session]
   ~name:"get_subject_identifier"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
+  ~params:(make_params [
     (*Ref _auth, "auth", "???";*)
-    String, "subject_name", "The human-readable subject_name, such as a username or a groupname" ; 
-    ]
+    String, "subject_name",  "The human-readable subject_name, such as a username or a groupname" ; 
+    ])
   ~result:(String, "the subject_identifier obtained from the external directory service")
   ~doc:"This call queries the external directory service to obtain the subject_identifier as a string from the human-readable subject_name"
   ~allowed_roles:_R_READ_ONLY
@@ -6466,9 +6701,9 @@ let auth_get_subject_information_from_identifier = call ~flags:[`Session]
   ~name:"get_subject_information_from_identifier"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
-    String, "subject_identifier", "A string containing the subject_identifier, unique in the external directory service"
-    ]
+  ~params:(make_params [
+    String, "subject_identifier",  "A string containing the subject_identifier, unique in the external directory service"
+    ])
   ~result:(Map(String,String), "key-value pairs containing at least a key called subject_name")
   ~doc:"This call queries the external directory service to obtain the user information (e.g. username, organization etc) from the specified subject_identifier"
   ~allowed_roles:_R_READ_ONLY
@@ -6478,9 +6713,9 @@ let auth_get_group_membership = call ~flags:[`Session]
   ~name:"get_group_membership"
   ~in_oss_since:None
   ~in_product_since:rel_george
-  ~params:[
-    String, "subject_identifier", "A string containing the subject_identifier, unique in the external directory service"
-    ]
+  ~params:(make_params [
+    String, "subject_identifier",  "A string containing the subject_identifier, unique in the external directory service"
+    ])
   ~result:(Set(String), "set of subject_identifiers that provides the group membership of subject_identifier passed as argument, it contains, recursively, all groups a subject_identifier is member of.")
   ~doc:"This calls queries the external directory service to obtain the transitively-closed set of groups that the the subject_identifier is member of."
   ~allowed_roles:_R_READ_ONLY
@@ -6502,10 +6737,10 @@ let subject_add_to_roles = call ~flags:[`Session]
   ~name:"add_to_roles"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _subject, "self", "The subject who we want to add the role to";
-    Ref _role, "role", "The unique role reference" ; 
-    ]
+  ~params:(make_params [
+    Ref _subject, "self",  "The subject who we want to add the role to";
+    Ref _role, "role",  "The unique role reference" ; 
+    ])
   ~doc:"This call adds a new role to a subject"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -6513,10 +6748,10 @@ let subject_remove_from_roles = call ~flags:[`Session]
   ~name:"remove_from_roles"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _subject, "self", "The subject from whom we want to remove the role";
-    Ref _role, "role", "The unique role reference in the subject's roles field" ; 
-    ]
+  ~params:(make_params [
+    Ref _subject, "self",  "The subject from whom we want to remove the role";
+    Ref _role, "role",  "The unique role reference in the subject's roles field" ; 
+    ])
   ~doc:"This call removes a role from a subject"
   ~allowed_roles:_R_POOL_ADMIN
   ()
@@ -6524,9 +6759,9 @@ let subject_get_permissions_name_label = call ~flags:[`Session]
   ~name:"get_permissions_name_label"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _subject, "self", "The subject whose permissions will be retrieved";
-    ]
+  ~params:(make_params [
+    Ref _subject, "self",  "The subject whose permissions will be retrieved";
+    ])
   ~result:(Set(String), "a list of permission names")
   ~doc:"This call returns a list of permission names given a subject"
   ~allowed_roles:_R_READ_ONLY
@@ -6557,9 +6792,9 @@ let role_get_permissions = call ~flags:[`Session]
   ~name:"get_permissions"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _role, "self", "a reference to a role";
-    ]
+  ~params:(make_params [
+    Ref _role, "self",  "a reference to a role";
+    ])
   ~result:(Set(Ref _role), "a list of permissions")
   ~doc:"This call returns a list of permissions given a role"
   ~allowed_roles:_R_READ_ONLY
@@ -6568,9 +6803,9 @@ let role_get_permissions_name_label = call ~flags:[`Session]
   ~name:"get_permissions_name_label"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _role, "self", "a reference to a role";
-    ]
+  ~params:(make_params [
+    Ref _role, "self",  "a reference to a role";
+    ])
   ~result:(Set(String), "a list of permission names")
   ~doc:"This call returns a list of permission names given a role"
   ~allowed_roles:_R_READ_ONLY
@@ -6579,9 +6814,9 @@ let role_get_by_permission = call ~flags:[`Session]
   ~name:"get_by_permission"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    Ref _role, "permission", "a reference to a permission" ;
-    ]
+  ~params:(make_params [
+    Ref _role, "permission",  "a reference to a permission" ;
+    ])
   ~result:(Set(Ref _role), "a list of references to roles")
   ~doc:"This call returns a list of roles given a permission"
   ~allowed_roles:_R_READ_ONLY
@@ -6590,9 +6825,9 @@ let role_get_by_permission_name_label = call ~flags:[`Session]
   ~name:"get_by_permission_name_label"
   ~in_oss_since:None
   ~in_product_since:rel_midnight_ride
-  ~params:[
-    String, "label", "The short friendly name of the role" ;
-    ]
+  ~params:(make_params [
+    String, "label",  "The short friendly name of the role" ;
+    ])
   ~result:(Set(Ref _role), "a list of references to roles")
   ~doc:"This call returns a list of roles given a permission name"
   ~allowed_roles:_R_READ_ONLY
@@ -6973,7 +7208,7 @@ let vmpr_removed = [
 let vmpp_protect_now = call ~flags:[`Session]
   ~name:"protect_now"
   ~lifecycle:vmpr_removed
-  ~params:[Ref _vmpp, "vmpp", "The protection policy to execute";]
+  ~params:(make_params [Ref _vmpp, "vmpp",  "The protection policy to execute";])
   ~doc:"This call executes the protection policy immediately"
   ~allowed_roles:_R_POOL_OP
   ~result:(String, "An XMLRPC result")
@@ -6981,7 +7216,7 @@ let vmpp_protect_now = call ~flags:[`Session]
 let vmpp_archive_now = call ~flags:[`Session]
   ~name:"archive_now"
   ~lifecycle:vmpr_removed
-  ~params:[Ref _vm, "snapshot", "The snapshot to archive";]
+  ~params:(make_params [Ref _vm, "snapshot",  "The snapshot to archive";])
   ~doc:"This call archives the snapshot provided as a parameter"
   ~allowed_roles:_R_VM_POWER_ADMIN
   ~result:(String, "An XMLRPC result")
@@ -6989,12 +7224,12 @@ let vmpp_archive_now = call ~flags:[`Session]
 let vmpp_create_alert = call ~flags:[`Session]
   ~name:"create_alert"
   ~lifecycle:vmpr_removed
-  ~params:[Ref _vmpp, "vmpp", "The protection policy where the alert should be created";
-     String, "name", "The name of the message";
-	   Int, "priority", "The priority of the message";
-	   String, "body", "The body of the email message";
-     String, "data", "The data in xml";
-  ]
+  ~params:(make_params [Ref _vmpp, "vmpp",  "The protection policy where the alert should be created";
+     String, "name",  "The name of the message";
+	   Int, "priority",  "The priority of the message";
+	   String, "body",  "The body of the email message";
+     String, "data",  "The data in xml";
+  ])
   ~doc:"This call creates an alert for some protection policy"
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ~hide_from_docs:true
@@ -7002,9 +7237,9 @@ let vmpp_create_alert = call ~flags:[`Session]
 let vmpp_get_alerts = call ~flags:[`Session]
   ~name:"get_alerts"
   ~lifecycle:vmpr_removed
-  ~params:[Ref _vmpp, "vmpp", "The protection policy";
-    Int, "hours_from_now", "how many hours in the past the oldest record to fetch is";
-  ]
+  ~params:(make_params [Ref _vmpp, "vmpp",  "The protection policy";
+    Int, "hours_from_now",  "how many hours in the past the oldest record to fetch is";
+  ])
   ~doc:"This call fetches a history of alerts for a given protection policy"
   ~allowed_roles:_R_POOL_OP
   ~result:(Set (String), "A list of alerts encoded in xml")
@@ -7043,18 +7278,18 @@ let vmpp_set_backup_retention_value = call ~flags:[`Session]
   ~name:"set_backup_retention_value"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Int, "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Int, "value",  "the value to set"
+  ])
   ()
 let vmpp_set_is_backup_running = call ~flags:[`Session]
   ~name:"set_is_backup_running"
   ~lifecycle:vmpr_removed
-  ~params:[
+  ~params:(make_params [
     Ref _vmpp, "self", "The protection policy";
-    Bool, "value", "true to mark this protection policy's backup is running"
-  ]
+    Bool, "value",  "true to mark this protection policy's backup is running"
+  ])
   ~doc:"Set the value of the is_backup_running field"
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ~hide_from_docs:true
@@ -7062,10 +7297,10 @@ let vmpp_set_is_backup_running = call ~flags:[`Session]
 let vmpp_set_is_archive_running = call ~flags:[`Session]
   ~name:"set_is_archive_running"
   ~lifecycle:vmpr_removed
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Bool, "value", "true to mark this protection policy's archive is running"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Bool, "value",  "true to mark this protection policy's archive is running"
+  ])
   ~doc:"Set the value of the is_archive_running field"
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
   ~hide_from_docs:true
@@ -7073,40 +7308,40 @@ let vmpp_set_is_archive_running = call ~flags:[`Session]
 let vmpp_set_is_alarm_enabled = call ~flags:[`Session]
   ~name:"set_is_alarm_enabled"
   ~lifecycle:vmpr_removed
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Bool, "value", "true if alarm is enabled for this policy"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Bool, "value",  "true if alarm is enabled for this policy"
+  ])
   ~doc:"Set the value of the is_alarm_enabled field"
   ~allowed_roles:_R_POOL_OP
   ()
 let vmpp_set_archive_frequency = call ~flags:[`Session]
   ~name:"set_archive_frequency"
   ~lifecycle:vmpr_removed
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    vmpp_archive_frequency, "value", "the archive frequency"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    vmpp_archive_frequency, "value",  "the archive frequency"
+  ])
   ~doc:"Set the value of the archive_frequency field"
   ~allowed_roles:_R_POOL_OP
   ()
 let vmpp_set_archive_target_type = call ~flags:[`Session]
   ~name:"set_archive_target_type"
   ~lifecycle:vmpr_removed
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    vmpp_archive_target_type, "value", "the archive target config type"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    vmpp_archive_target_type, "value",  "the archive target config type"
+  ])
   ~doc:"Set the value of the archive_target_config_type field"
   ~allowed_roles:_R_POOL_OP
   ()
 let vmpp_set_backup_frequency = call ~flags:[`Session]
   ~name:"set_backup_frequency"
   ~lifecycle:vmpr_removed
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    vmpp_backup_frequency, "value", "the backup frequency"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    vmpp_backup_frequency, "value",  "the backup frequency"
+  ])
   ~doc:"Set the value of the backup_frequency field"
   ~allowed_roles:_R_POOL_OP
   ()
@@ -7114,131 +7349,131 @@ let vmpp_set_backup_schedule = call ~flags:[`Session]
   ~name:"set_backup_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Map(String,String), "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Map(String,String), "value",  "the value to set"
+  ])
   ()
 let vmpp_set_archive_target_config = call ~flags:[`Session]
   ~name:"set_archive_target_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Map(String,String), "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Map(String,String), "value",  "the value to set"
+  ])
   ()
 let vmpp_set_archive_schedule = call ~flags:[`Session]
   ~name:"set_archive_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Map(String,String), "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Map(String,String), "value",  "the value to set"
+  ])
   ()
 let vmpp_set_alarm_config = call ~flags:[`Session]
   ~name:"set_alarm_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    Map(String,String), "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    Map(String,String), "value",  "the value to set"
+  ])
   ()
 let vmpp_set_backup_last_run_time = call ~flags:[`Session]
   ~name:"set_backup_last_run_time"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    DateTime, "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    DateTime, "value",  "the value to set"
+  ])
   ()
 let vmpp_set_archive_last_run_time = call ~flags:[`Session]
   ~name:"set_archive_last_run_time"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_LOCAL_ROOT_ONLY
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    DateTime, "value", "the value to set"
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    DateTime, "value",  "the value to set"
+  ])
   ()
 let vmpp_add_to_backup_schedule = call ~flags:[`Session]
   ~name:"add_to_backup_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to add";
-    String, "value", "the value to add";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to add";
+    String, "value",  "the value to add";
+  ])
   ()
 let vmpp_add_to_archive_target_config = call ~flags:[`Session]
   ~name:"add_to_archive_target_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to add";
-    String, "value", "the value to add";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to add";
+    String, "value",  "the value to add";
+  ])
   ()
 let vmpp_add_to_archive_schedule = call ~flags:[`Session]
   ~name:"add_to_archive_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to add";
-    String, "value", "the value to add";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to add";
+    String, "value",  "the value to add";
+  ])
   ()
 let vmpp_add_to_alarm_config = call ~flags:[`Session]
   ~name:"add_to_alarm_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to add";
-    String, "value", "the value to add";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to add";
+    String, "value",  "the value to add";
+  ])
   ()
 let vmpp_remove_from_backup_schedule = call ~flags:[`Session]
   ~name:"remove_from_backup_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to remove";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to remove";
+  ])
   ()
 let vmpp_remove_from_archive_target_config = call ~flags:[`Session]
   ~name:"remove_from_archive_target_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to remove";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to remove";
+  ])
   ()
 let vmpp_remove_from_archive_schedule = call ~flags:[`Session]
   ~name:"remove_from_archive_schedule"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to remove";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to remove";
+  ])
   ()
 let vmpp_remove_from_alarm_config = call ~flags:[`Session]
   ~name:"remove_from_alarm_config"
   ~lifecycle:vmpr_removed
   ~allowed_roles:_R_POOL_OP
-  ~params:[
-    Ref _vmpp, "self", "The protection policy";
-    String, "key", "the key to remove";
-  ]
+  ~params:(make_params [
+    Ref _vmpp, "self",  "The protection policy";
+    String, "key",  "the key to remove";
+  ])
   ()
 let vmpp =
   create_obj ~in_db:true ~in_oss_since:None ~persist:PersistEverything ~gen_constructor_destructor:true ~name:_vmpp ~descr:"VM Protection Policy"
@@ -7310,10 +7545,10 @@ let vm_appliance =
 	let vm_appliance_start = call
 		~name:"start"
 		~in_product_since:rel_boston
-		~params:[
-			Ref _vm_appliance, "self", "The VM appliance";
-			Bool, "paused", "Instantiate all VMs belonging to this appliance in paused state if set to true."
-		]
+		~params:(make_params [
+			Ref _vm_appliance, "self",  "The VM appliance";
+			Bool, "paused",  "Instantiate all VMs belonging to this appliance in paused state if set to true."
+		])
 		~errs:[Api_errors.operation_partially_failed]
 		~doc:"Start all VMs in the appliance"
 		~allowed_roles:_R_POOL_OP
@@ -7321,7 +7556,7 @@ let vm_appliance =
 	let vm_appliance_clean_shutdown = call
 		~name:"clean_shutdown"
 		~in_product_since:rel_boston
-		~params:[Ref _vm_appliance, "self", "The VM appliance"]
+		~params:(make_params [Ref _vm_appliance, "self",  "The VM appliance"])
 		~errs:[Api_errors.operation_partially_failed]
 		~doc:"Perform a clean shutdown of all the VMs in the appliance"
 		~allowed_roles:_R_POOL_OP
@@ -7329,7 +7564,7 @@ let vm_appliance =
 	let vm_appliance_hard_shutdown = call
 		~name:"hard_shutdown"
 		~in_product_since:rel_boston
-		~params:[Ref _vm_appliance, "self", "The VM appliance"]
+		~params:(make_params [Ref _vm_appliance, "self",  "The VM appliance"])
 		~errs:[Api_errors.operation_partially_failed]
 		~doc:"Perform a hard shutdown of all the VMs in the appliance"
 		~allowed_roles:_R_POOL_OP
@@ -7337,7 +7572,7 @@ let vm_appliance =
 	let vm_appliance_shutdown = call
 		~name:"shutdown"
 		~in_product_since:rel_boston
-		~params:[Ref _vm_appliance, "self", "The VM appliance"]
+		~params:(make_params [Ref _vm_appliance, "self",  "The VM appliance"])
 		~errs:[Api_errors.operation_partially_failed]
 		~doc:"For each VM in the appliance, try to shut it down cleanly. If this fails, perform a hard shutdown of the VM."
 		~allowed_roles:_R_POOL_OP
@@ -7345,8 +7580,8 @@ let vm_appliance =
 	let vm_appliance_assert_can_be_recovered = call
 		~name:"assert_can_be_recovered"
 		~in_product_since:rel_boston
-		~params:[Ref _vm_appliance, "self", "The VM appliance to recover";
-			Ref _session, "session_to", "The session to which the VM appliance is to be recovered."]
+		~params:(make_params [Ref _vm_appliance, "self",  "The VM appliance to recover";
+			Ref _session, "session_to",  "The session to which the VM appliance is to be recovered."])
 		~errs:[Api_errors.vm_requires_sr]
 		~doc:"Assert whether all SRs required to recover this VM appliance are available."
 		~allowed_roles:_R_READ_ONLY
@@ -7354,8 +7589,8 @@ let vm_appliance =
 	let vm_appliance_get_SRs_required_for_recovery = call
 		~name:"get_SRs_required_for_recovery"
 		~in_product_since:rel_creedence
-		~params:[Ref _vm_appliance , "self" , "The VM appliance for which the required list of SRs has to be recovered.";
-			Ref _session , "session_to", "The session to which the list of SRs have to be recovered ."]
+		~params:(make_params [Ref _vm_appliance , "self" ,  "The VM appliance for which the required list of SRs has to be recovered.";
+			Ref _session , "session_to",  "The session to which the list of SRs have to be recovered ."])
 		~result:(Set(Ref _sr), "refs for SRs required to recover the VM")
 		~errs:[]
 		~doc:"Get the list of SRs required by the VM appliance to recover."
@@ -7364,9 +7599,9 @@ let vm_appliance =
 	let vm_appliance_recover = call
 		~name:"recover"
 		~in_product_since:rel_boston
-		~params:[Ref _vm_appliance, "self", "The VM appliance to recover";
-			Ref _session, "session_to", "The session to which the VM appliance is to be recovered.";
-			Bool, "force", "Whether the VMs should replace newer versions of themselves."]
+		~params:(make_params [Ref _vm_appliance, "self",  "The VM appliance to recover";
+			Ref _session, "session_to",  "The session to which the VM appliance is to be recovered.";
+			Bool, "force",  "Whether the VMs should replace newer versions of themselves."])
 		~errs:[Api_errors.vm_requires_sr]
 		~doc:"Recover the VM appliance"
 		~allowed_roles:_R_READ_ONLY
@@ -7397,11 +7632,11 @@ let dr_task =
 	let create = call
 		~name:"create"
 		~in_product_since:rel_boston
-		~params:[
-			String, "type", "The SR driver type of the SRs to introduce";
-			Map(String, String), "device_config", "The device configuration of the SRs to introduce";
-			Set(String), "whitelist", "The devices to use for disaster recovery"
-		]
+		~params:(make_params [
+			String, "type",  "The SR driver type of the SRs to introduce";
+			Map(String, String), "device_config",  "The device configuration of the SRs to introduce";
+			Set(String), "whitelist",  "The devices to use for disaster recovery"
+		])
 		~result:(Ref _dr_task, "The reference to the created task")
 		~doc:"Create a disaster recovery task which will query the supplied list of devices"
 		~allowed_roles:_R_POOL_OP
@@ -7409,9 +7644,9 @@ let dr_task =
 	let destroy = call
 		~name:"destroy"
 		~in_product_since:rel_boston
-		~params:[
-			Ref _dr_task, "self", "The disaster recovery task to destroy"
-		]
+		~params:(make_params [
+			Ref _dr_task, "self",  "The disaster recovery task to destroy"
+		])
 		~doc:"Destroy the disaster recovery task, detaching and forgetting any SRs introduced which are no longer required"
 		~allowed_roles:_R_POOL_OP
 		() in
@@ -7445,19 +7680,19 @@ let event =
   let register = call
     ~name:"register" 
     ~in_product_since:rel_rio
-    ~params:[Set String, "classes", "register for events for the indicated classes"]
+    ~params:(make_params [Set String, "classes",  "register for events for the indicated classes"])
     ~doc:"Registers this session with the event system.  Specifying * as the desired class will register for all classes."
     ~allowed_roles:_R_ALL
     () in
   let unregister = call
     ~name:"unregister"
     ~in_product_since:rel_rio
-    ~params:[Set String, "classes", "remove this session's registration for the indicated classes"]
+    ~params:(make_params [Set String, "classes",  "remove this session's registration for the indicated classes"])
     ~doc:"Unregisters this session with the event system"
     ~allowed_roles:_R_ALL
     () in
   let next = call
-    ~name:"next" ~params:[]
+    ~name:"next" ~params:(make_params [])
     ~in_product_since:rel_rio
     ~doc:"Blocking call which returns a (possibly empty) batch of events. This method is only recommended for legacy use. New development should use event.from which supercedes this method. "
     ~custom_marshaller:true
@@ -7468,10 +7703,10 @@ let event =
       () in
   let from = call
     ~name:"from" 
-	~params:[Set String, "classes", "register for events for the indicated classes";
-			 String, "token", "A token representing the point from which to generate database events. The empty string represents the beginning.";
-			 Float, "timeout", "Return after this many seconds if no events match";
-	]
+	~params:(make_params [Set String, "classes",  "register for events for the indicated classes";
+			 String, "token",  "A token representing the point from which to generate database events. The empty string represents the beginning.";
+			 Float, "timeout",  "Return after this many seconds if no events match";
+	])
     ~in_product_since:rel_boston
     ~doc:"Blocking call which returns a new token and a (possibly empty) batch of events. The returned token can be used in subsequent calls to this function."
     ~custom_marshaller:true
@@ -7481,7 +7716,7 @@ let event =
     ~allowed_roles:_R_ALL
       () in
   let get_current_id = call
-    ~name:"get_current_id" ~params:[]
+    ~name:"get_current_id" ~params:(make_params [])
     ~in_product_since:rel_rio
     ~doc:"Return the ID of the next event to be generated by the system"
     ~flags:[`Session]
@@ -7489,10 +7724,10 @@ let event =
     ~allowed_roles:_R_ALL
     () in
   let inject = call
-	  ~name:"inject" ~params:[
-		  String, "class", "class of the object";
-		  String, "ref", "A reference to the object that will be changed.";
-	  ]
+	  ~name:"inject" ~params:(make_params [
+		  String, "class",  "class of the object";
+		  String, "ref",  "A reference to the object that will be changed.";
+	  ])
 	  ~in_product_since:rel_tampa
 	  ~doc:"Injects an artificial event on the given object and return the corresponding ID"
 	  ~flags:[`Session]
@@ -7530,9 +7765,9 @@ let blob =
   let create = call
     ~name:"create"
     ~in_product_since:rel_orlando
-	~versioned_params:
-	[{param_type=String; param_name="mime_type"; param_doc="The mime-type of the blob. Defaults to 'application/octet-stream' if the empty string is supplied"; param_release=orlando_release; param_default=None};
-	{param_type=Bool; param_name="public"; param_doc="True if the blob should be publicly available"; param_release=tampa_release; param_default=Some (VBool false)}]
+	~params:
+	[param ~name:"mime_type" ~ty:(String) ~doc:"The mime-type of the blob. Defaults to 'application/octet-stream' if the empty string is supplied" ~release:orlando_release ?default:None ();
+	param ~name:"public" ~ty:(Bool) ~doc:"True if the blob should be publicly available" ~release:tampa_release ?default:(Some (VBool false)) ()]
     ~doc:"Create a placeholder for a binary blob"
     ~flags:[`Session]
     ~result:(Ref _blob, "The reference to the created blob")
@@ -7541,7 +7776,7 @@ let blob =
   let destroy = call
     ~name:"destroy"
     ~in_product_since:rel_orlando
-    ~params:[Ref _blob, "self", "The reference of the blob to destroy"]
+    ~params:(make_params [Ref _blob, "self",  "The reference of the blob to destroy"])
     ~flags:[`Session]
     ~allowed_roles:_R_POOL_OP
     () in
@@ -7570,11 +7805,11 @@ let message =
   let create = call
     ~name:"create"
     ~in_product_since:rel_orlando
-    ~params:[String, "name", "The name of the message";
-	     Int, "priority", "The priority of the message";
-	     cls, "cls", "The class of object this message is associated with";
-	     String, "obj_uuid", "The uuid of the object this message is associated with";
-	     String, "body", "The body of the message"]
+    ~params:(make_params [String, "name",  "The name of the message";
+	     Int, "priority",  "The priority of the message";
+	     cls, "cls",  "The class of object this message is associated with";
+	     String, "obj_uuid",  "The uuid of the object this message is associated with";
+	     String, "body",  "The body of the message"])
     ~flags:[`Session]
     ~result:(Ref _message, "The reference of the created message")
     ~allowed_roles:_R_POOL_OP
@@ -7583,15 +7818,15 @@ let message =
   let destroy = call
     ~name:"destroy"
     ~in_product_since:rel_orlando
-    ~params:[Ref _message, "self", "The reference of the message to destroy"]
+    ~params:(make_params [Ref _message, "self",  "The reference of the message to destroy"])
     ~flags:[`Session]
     ~allowed_roles:_R_POOL_OP
     ()
   in
-  let get_all = call 
+  let get_all = call
     ~name:"get_all"
     ~in_product_since:rel_orlando
-    ~params:[]
+    ~params:(make_params [])
     ~flags:[`Session]
     ~result:(Set(Ref _message), "The references to the messages")
     ~allowed_roles:_R_READ_ONLY
@@ -7600,9 +7835,9 @@ let message =
   let get = call
     ~name:"get"
     ~in_product_since:rel_orlando
-    ~params:[cls, "cls", "The class of object";
-	     String, "obj_uuid", "The uuid of the object";
-	     DateTime, "since", "The cutoff time"]
+    ~params:(make_params [cls, "cls",  "The class of object";
+	     String, "obj_uuid",  "The uuid of the object";
+	     DateTime, "since",  "The cutoff time"])
     ~flags:[`Session]
     ~result:(Map(Ref _message, Record _message), "The relevant messages")
     ~allowed_roles:_R_READ_ONLY
@@ -7611,7 +7846,7 @@ let message =
   let get_since = call
     ~name:"get_since"
     ~in_product_since:rel_orlando
-    ~params:[DateTime, "since", "The cutoff time"]
+    ~params:(make_params [DateTime, "since",  "The cutoff time"])
     ~flags:[`Session]
     ~result:(Map(Ref _message, Record _message), "The relevant messages")
     ~allowed_roles:_R_READ_ONLY
@@ -7620,7 +7855,7 @@ let message =
   let get_by_uuid = call
     ~name:"get_by_uuid"
     ~in_product_since:rel_orlando
-    ~params:[String, "uuid", "The uuid of the message"]
+    ~params:(make_params [String, "uuid",  "The uuid of the message"])
     ~flags:[`Session]
     ~result:(Ref _message, "The message reference")
     ~allowed_roles:_R_READ_ONLY
@@ -7629,7 +7864,7 @@ let message =
   let get_record = call
     ~name:"get_record"
     ~in_product_since:rel_orlando
-    ~params:[Ref _message, "self", "The reference to the message"]
+    ~params:(make_params [Ref _message, "self",  "The reference to the message"])
     ~flags:[`Session]
     ~result:(Record _message, "The message record")
     ~allowed_roles:_R_READ_ONLY
@@ -7638,7 +7873,7 @@ let message =
   let get_all_records = call 
     ~name:"get_all_records"
     ~in_product_since:rel_orlando
-    ~params:[]
+    ~params:(make_params [])
     ~flags:[`Session]
     ~result:(Map(Ref _message, Record _message), "The messages")
     ~allowed_roles:_R_READ_ONLY
@@ -7647,7 +7882,7 @@ let message =
   let get_all_records_where = call 
     ~name:"get_all_records_where"
     ~in_product_since:rel_orlando
-    ~params:[String, "expr", "The expression to match (not currently used)"]
+    ~params:(make_params [String, "expr",  "The expression to match (not currently used)"])
     ~flags:[`Session]
     ~result:(Map(Ref _message, Record _message), "The messages")
     ~allowed_roles:_R_READ_ONLY
@@ -7670,10 +7905,10 @@ let secret =
 	let introduce = call
 		~name:"introduce"
 		~in_product_since:rel_midnight_ride
-		~versioned_params:[
-			{param_type=String; param_name="uuid"; param_doc=""; param_release=midnight_ride_release; param_default=None};
-			{param_type=String; param_name="value"; param_doc=""; param_release=midnight_ride_release; param_default=None};
-			{param_type=(Map (String, String)); param_name="other_config"; param_doc=""; param_release=boston_release; param_default=Some (VMap [])}
+		~params:[
+			param ~name:"uuid" ~ty:(String) ~doc:"" ~release:midnight_ride_release ?default:None ();
+			param ~name:"value" ~ty:(String) ~doc:"" ~release:midnight_ride_release ?default:None ();
+			param ~name:"other_config" ~ty:(Map (String, String)) ~doc:"" ~release:boston_release ?default:(Some (VMap [])) ()
 		]
 		~flags:[`Session]
 		~result:(Ref _secret, "")
@@ -7765,21 +8000,21 @@ let pgpu =
 	let add_enabled_VGPU_types = call
 		~name:"add_enabled_VGPU_types"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~versioned_params:[
-			{
-				param_type = (Ref _pgpu);
-				param_name = "self";
-				param_doc = "The PGPU to which we are adding an enabled VGPU type";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
-			{
-				param_type = (Ref _vgpu_type);
-				param_name = "value";
-				param_doc = "The VGPU type to enable";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
+		~params:[
+			param
+				~ty:(Ref _pgpu)
+				~name:"self"
+				~doc: "The PGPU to which we are adding an enabled VGPU type"
+				~release:vgpu_tech_preview_release
+				()
+			;
+			param
+				~ty:(Ref _vgpu_type)
+				~name:"value"
+				~doc: "The VGPU type to enable"
+				~release:vgpu_tech_preview_release
+				()
+			;
 		]
 		~allowed_roles:_R_POOL_OP
 		()
@@ -7787,21 +8022,21 @@ let pgpu =
 	let remove_enabled_VGPU_types = call
 		~name:"remove_enabled_VGPU_types"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~versioned_params:[
-			{
-				param_type = (Ref _pgpu);
-				param_name = "self";
-				param_doc = "The PGPU from which we are removing an enabled VGPU type";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
-			{
-				param_type = (Ref _vgpu_type);
-				param_name = "value";
-				param_doc = "The VGPU type to disable";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
+		~params:[
+			param
+				~ty:(Ref _pgpu)
+				~name:"self"
+				~doc: "The PGPU from which we are removing an enabled VGPU type"
+				~release:vgpu_tech_preview_release
+				()
+			;
+			param
+				~ty:(Ref _vgpu_type)
+				~name:"value"
+				~doc: "The VGPU type to disable"
+				~release:vgpu_tech_preview_release
+				()
+			;
 		]
 		~allowed_roles:_R_POOL_OP
 		()
@@ -7809,21 +8044,21 @@ let pgpu =
 	let set_enabled_VGPU_types = call
 		~name:"set_enabled_VGPU_types"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~versioned_params:[
-			{
-				param_type = (Ref _pgpu);
-				param_name = "self";
-				param_doc = "The PGPU on which we are enabling a set of VGPU types";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
-			{
-				param_type = Set (Ref _vgpu_type);
-				param_name = "value";
-				param_doc = "The VGPU types to enable";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
+		~params:[
+			param
+				~ty:(Ref _pgpu)
+				~name:"self"
+				~doc: "The PGPU on which we are enabling a set of VGPU types"
+				~release:vgpu_tech_preview_release
+				()
+			;
+			param
+				~ty:(Set (Ref _vgpu_type))
+				~name:"value"
+				~doc: "The VGPU types to enable"
+				~release:vgpu_tech_preview_release
+				()
+			;
 		]
 		~allowed_roles:_R_POOL_OP
 		()
@@ -7831,9 +8066,9 @@ let pgpu =
 	let set_GPU_group = call
 		~name:"set_GPU_group"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~versioned_params:[
-			{param_type=(Ref _pgpu); param_name="self"; param_doc="The PGPU to move to a new group"; param_release=vgpu_tech_preview_release; param_default=None};
-			{param_type=(Ref _gpu_group); param_name="value"; param_doc="The group to which the PGPU will be moved"; param_release=vgpu_tech_preview_release; param_default=None};
+		~params:[
+			param ~name:"self" ~ty:(Ref _pgpu) ~doc:"The PGPU to move to a new group" ~release:vgpu_tech_preview_release ?default:None ();
+			param ~name:"value" ~ty:(Ref _gpu_group) ~doc:"The group to which the PGPU will be moved" ~release:vgpu_tech_preview_release ?default:None ();
 		]
 		~allowed_roles:_R_POOL_OP
 		()
@@ -7841,21 +8076,21 @@ let pgpu =
 	let get_remaining_capacity = call
 		~name:"get_remaining_capacity"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~versioned_params:[
-			{
-				param_type = (Ref _pgpu);
-				param_name = "self";
-				param_doc = "The PGPU to query";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
-			{
-				param_type = (Ref _vgpu_type);
-				param_name = "vgpu_type";
-				param_doc = "The VGPU type for which we want to find the number of VGPUs which can still be started on this PGPU";
-				param_release = vgpu_tech_preview_release;
-				param_default = None;
-			};
+		~params:[
+			param
+				~ty:(Ref _pgpu)
+				~name:"self"
+				~doc: "The PGPU to query"
+				~release:vgpu_tech_preview_release
+				()
+			;
+			param
+				~ty:(Ref _vgpu_type)
+				~name:"vgpu_type"
+				~doc: "The VGPU type for which we want to find the number of VGPUs which can still be started on this PGPU"
+				~release:vgpu_tech_preview_release
+				()
+			;
 		]
 		~result:(Int, "The number of VGPUs of the specified type which can still be started on this PGPU")
 		~allowed_roles:_R_READ_ONLY
@@ -7899,10 +8134,10 @@ let gpu_group =
 	let create = call
 		~name:"create"
 		~lifecycle:[Published, rel_boston, ""]
-		~versioned_params:[
-			{param_type=(String); param_name="name_label"; param_doc=""; param_release=boston_release; param_default=Some (VString "")};
-			{param_type=(String); param_name="name_description"; param_doc=""; param_release=boston_release; param_default=Some (VString "")};
-			{param_type=(Map (String, String)); param_name="other_config"; param_doc=""; param_release=boston_release; param_default=Some (VMap [])}
+		~params:[
+			param ~name:"name_label" ~ty:(String) ~doc:"" ~release:boston_release ?default:(Some (VString "")) ();
+			param ~name:"name_description" ~ty:(String) ~doc:"" ~release:boston_release ?default:(Some (VString "")) ();
+			param ~name:"other_config" ~ty:(Map (String, String)) ~doc:"" ~release:boston_release ?default:(Some (VMap [])) ()
 		]
 		~result:(Ref _gpu_group, "")
 		~allowed_roles:_R_POOL_OP
@@ -7911,9 +8146,9 @@ let gpu_group =
 	let destroy = call
 		~name:"destroy"
 		~lifecycle:[Published, rel_boston, ""]
-		~params:[
-			Ref _gpu_group, "self", "The vGPU to destroy"
-		]
+		~params:(make_params [
+			Ref _gpu_group, "self",  "The vGPU to destroy"
+		])
 		~allowed_roles:_R_POOL_OP
 		()
 	in
@@ -7921,9 +8156,9 @@ let gpu_group =
 		~name:"update_enabled_VGPU_types"
 		~hide_from_docs:true
 		~lifecycle:[Published, rel_vgpu_productisation, ""]
-		~params:[
-			Ref _gpu_group, "self", "The GPU group to update";
-		]
+		~params:(make_params [
+			Ref _gpu_group, "self",  "The GPU group to update";
+		])
 		~allowed_roles:_R_POOL_OP
 		()
 	in
@@ -7931,19 +8166,19 @@ let gpu_group =
 		~name:"update_supported_VGPU_types"
 		~hide_from_docs:true
 		~lifecycle:[Published, rel_vgpu_productisation, ""]
-		~params:[
-			Ref _gpu_group, "self", "The GPU group to update";
-		]
+		~params:(make_params [
+			Ref _gpu_group, "self",  "The GPU group to update";
+		])
 		~allowed_roles:_R_POOL_OP
 		()
 	in
 	let get_remaining_capacity = call
 		~name:"get_remaining_capacity"
 		~lifecycle:[Published, rel_vgpu_tech_preview, ""]
-		~params:[
-			Ref _gpu_group, "self", "The GPU group to query";
-			Ref _vgpu_type, "vgpu_type", "The VGPU_type for which the remaining capacity will be calculated";
-		]
+		~params:(make_params [
+			Ref _gpu_group, "self",  "The GPU group to query";
+			Ref _vgpu_type, "vgpu_type",  "The VGPU_type for which the remaining capacity will be calculated";
+		])
 		~result:(Int, "The number of VGPUs of the given type which can still be started on the PGPUs in the group")
 		~allowed_roles:_R_READ_ONLY
 		()
@@ -7991,12 +8226,12 @@ let vgpu =
 	let create = call
 		~name:"create"
 		~lifecycle:[Published, rel_boston, ""]
-		~versioned_params:[
-			{param_type=(Ref _vm); param_name="VM"; param_doc=""; param_release=boston_release; param_default=None};
-			{param_type=(Ref _gpu_group); param_name="GPU_group"; param_doc=""; param_release=boston_release; param_default=None};
-			{param_type=String; param_name="device"; param_doc=""; param_release=boston_release; param_default=Some (VString "0")};
-			{param_type=(Map (String, String)); param_name="other_config"; param_doc=""; param_release=boston_release; param_default=Some (VMap [])};
-			{param_type=(Ref _vgpu_type); param_name="type"; param_doc=""; param_release=vgpu_tech_preview_release; param_default=(Some (VRef (Ref.string_of Ref.null)))};
+		~params:[
+			param ~name:"VM" ~ty:(Ref _vm) ~doc:"" ~release:boston_release ?default:None ();
+			param ~name:"GPU_group" ~ty:(Ref _gpu_group) ~doc:"" ~release:boston_release ?default:None ();
+			param ~name:"device" ~ty:(String) ~doc:"" ~release:boston_release ?default:(Some (VString "0")) ();
+			param ~name:"other_config" ~ty:(Map (String, String)) ~doc:"" ~release:boston_release ?default:(Some (VMap [])) ();
+			param ~name:"type" ~ty:(Ref _vgpu_type) ~doc:"" ~release:vgpu_tech_preview_release ?default:(Some (VRef (Ref.string_of Ref.null))) ();
 		]
 		~result:(Ref _vgpu, "reference to the newly created object")
 		~allowed_roles:_R_POOL_OP
@@ -8005,9 +8240,9 @@ let vgpu =
 	let destroy = call
 		~name:"destroy"
 		~lifecycle:[Published, rel_boston, ""]
-		~params:[
-			Ref _vgpu, "self", "The vGPU to destroy"
-		]
+		~params:(make_params [
+			Ref _vgpu, "self",  "The vGPU to destroy"
+		])
 		~allowed_roles:_R_POOL_OP
 		()
 	in

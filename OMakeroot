@@ -87,7 +87,7 @@ OCamlDoc(name, modules, type) =
     .PHONY: doc
     dir = $(ROOT)/ocaml/doc
     doc: $(CMIFILES) $(ROOT)/ocaml/doc/odoc_json.cma
-        python $(ROOT)/ocaml/doc/doc.py $(dir) $(name) $(type) "$(modules)" "$(OCAMLINCLUDES)" "$(OCAMLPACKS)" "$(OCAML_LIBS)"
+#        python $(ROOT)/ocaml/doc/doc.py $(dir) $(name) $(type) "$(modules)" "$(OCAMLINCLUDES)" "$(OCAMLPACKS)" "$(OCAML_LIBS)"
 
 OCamlDocProgram(name, modules) =
 	OCamlDoc($(name), $(modules), "program")

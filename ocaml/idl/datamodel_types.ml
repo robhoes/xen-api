@@ -147,7 +147,20 @@ and private_op = GetDBRecord | GetDBAll | Copy
 and obj_op = Make | Delete | GetByUuid | GetByLabel | GetRecord | GetAll | GetAllRecordsWhere | GetAllRecords
     | Private of private_op
 
-and param = {param_type:ty; param_name:string; param_doc:string; param_release: release; param_default: api_value option}
+and map_key = {
+    map_key: api_value;
+    map_lifecycle: lifecycle_transition list;
+    map_doc: string;
+}
+
+and param = {
+    param_type: ty;
+    param_name: string;
+    param_doc: string;
+    param_release: release;
+    param_default: api_value option;
+    param_map_keys: map_key list option;
+}
 
 (** Types of RPC messages; in addition to those generated for object fields *)
 and message = { 

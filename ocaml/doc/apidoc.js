@@ -79,7 +79,7 @@ function transform_type(t)
 	return 'Unknown[' + t + ']';
 }
 
-function transform_default(t)
+function string_of_api_value(t)
 {
 	switch (t[0]) {
 	case "VString":
@@ -96,9 +96,9 @@ function transform_default(t)
 		return t[1] + ' record';
 		return t[1];
 	case "VSet":
-		return '{' + map(function(v){return transform_default(v)}, t[1]) + '}';
+		return '{' + map(function(v){return string_of_api_value(v)}, t[1]) + '}';
 	case "VMap":
-		return '{' + map(function(v){return transform_default(v[0]) + ' \u2192 ' + transform_default(v[1])}, t[1]) + '}';
+		return '{' + map(function(v){return string_of_api_value(v[0]) + ' \u2192 ' + string_of_api_value(v[1])}, t[1]) + '}';
 	}
 	return 'Unknown[' + t + ']';
 }
@@ -144,7 +144,7 @@ function make_field(fld, n)
 	
 	html += '<table class="field-table">';
 	if (fld.default_value != undefined)
-		html += '<tr><td style="white-space: nowrap"><span class="field-head">Default value:</span></td><td colspan="2">' + transform_default(fld.default_value) + '</td></tr>';
+		html += '<tr><td style="white-space: nowrap"><span class="field-head">Default value:</span></td><td colspan="2">' + string_of_api_value(fld.default_value) + '</td></tr>';
 		
 	for (i in fld.lifecycle) {
 		l = fld.lifecycle[i];
@@ -154,6 +154,15 @@ function make_field(fld, n)
 	html += '</div></div>';
 	
 	return html;
+}
+
+function map_keys_doc(map_keys)
+{
+	if (map_keys != undefined) {
+		s = map(function(m){return '<br>&nbsp;&nbsp;' + string_of_api_value(m.map_key) + ': ' + m.map_doc}, map_keys);
+		return ':<i>' + s + '</i>';
+		}
+	return '';
 }
 
 function make_message(msg, n)
@@ -179,7 +188,7 @@ function make_message(msg, n)
 		p = msg.msg_params[i];
 		html += '<tr><td style="white-space: nowrap">' + (i == 0 ? '<span class="field-head">Parameters:</span>' : '') + '</td>';
 		html += '<td style="white-space: nowrap">' + transform_type(p.param_type) + '  ' + p.param_name + '</td>';
-		html += '<td>' + p.param_doc + '</td></tr>';
+		html += '<td>' + p.param_doc + map_keys_doc(p.param_map_keys)  + '</td></tr>';
 	}
 
 	html += '<tr><td><span class="field-head">Minimum role:</span></td><td colspan="2">' + msg.msg_allowed_roles[msg.msg_allowed_roles.length - 1] + '</td></tr>';
