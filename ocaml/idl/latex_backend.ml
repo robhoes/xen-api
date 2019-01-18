@@ -195,7 +195,9 @@ let space = "\\vspace{0.3cm}"
 let latex_section_of_message closed section_prefix x =
   String.concat "\n"
     ([
-      String.concat "" ["\\"^section_prefix^"subsection{RPC name:~"; escape x.msg_name; "}\n"];
+      String.concat "" (["\\"^section_prefix^"subsection{RPC name:~"; escape x.msg_name] @
+        (if x.msg_hide_from_docs then [" (not public)"] else [""]) @
+        ["}\n"]);
       "{\\bf Overview:} ";
       if x.msg_release.internal_deprecated_since <> None
       then "{\\bf This message is deprecated}"

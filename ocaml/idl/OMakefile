@@ -45,7 +45,7 @@ xenapi-datamodel.tex: datamodel
 
 
 xenenterpriseapi-datamodel.tex: datamodel
-	./datamodel -latex  -closed >$@
+	./datamodel -latex -hidden -closed >$@
 
 datamodel-dtd.xml: datamodel
 	./datamodel -dtd  >$@
