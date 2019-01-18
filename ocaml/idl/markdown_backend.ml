@@ -168,6 +168,10 @@ let markdown_section_of_message printer obj ~is_class_deprecated
   let return_type = of_ty_opt_verbatim x.msg_result in
   printer (sprintf "#### RPC name: %s" (escape x.msg_name)) ;
   printer "" ;
+  if x.msg_hide_from_docs then (
+    printer "**Not public.**" ;
+    printer ""
+  ) ;
   if List.exists is_removal_marker x.msg_lifecycle || is_class_removed then (
     printer "**This message is removed.**" ;
     printer ""

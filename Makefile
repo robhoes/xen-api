@@ -26,7 +26,7 @@ doc:
 	cp -r _build/default/ocaml/doc/api $(XAPIDOC)/html
 	cp _build/default/ocaml/doc/branding.js $(XAPIDOC)/html
 	cp ocaml/doc/*.js ocaml/doc/*.html ocaml/doc/*.css $(XAPIDOC)/html
-	dune exec --profile=$(PROFILE) -- ocaml/idl/datamodel_main.exe -closed -markdown $(XAPIDOC)/markdown
+	dune exec --profile=$(PROFILE) -- ocaml/idl/datamodel_main.exe -hidden -closed -markdown $(XAPIDOC)/markdown
 	cp ocaml/doc/*.dot ocaml/doc/doc-convert.sh $(XAPIDOC)
 	find ocaml/doc -name "*.md" -not -name "README.md" -exec cp {} $(XAPIDOC)/markdown/ \;
 

@@ -25,6 +25,7 @@ let _ =
   and dtd_mode = ref false
   and closed = ref false (* shows release_closed *)
   and all = ref false (* shows release_impl as well *)
+  and hidden = ref false (* includes hidden messages *)
   and dirname = ref "" in
 
   Arg.parse [ "-dot", Arg.Set dot_mode, "output dot graph";
@@ -32,6 +33,7 @@ let _ =
               "-dtd", Arg.Set dtd_mode, "output XML DTD";
               "-closed", Arg.Set closed, "output all OSS + closed API functions but not including internal ones";
               "-all", Arg.Set all, "output all API functions, including internal ones";
+              "-hidden", Arg.Set hidden, "include hidden messages"
             ]
     (fun x -> dirname := x)
     "compile XenSource API datamodel specification";
@@ -63,8 +65,8 @@ let _ =
   let api = DU.add_implicit_messages ~document_order:!markdown_mode api in
   (* Only show those visible to the client *)
   let api = filter (fun _ -> true) (fun field -> true) DU.on_client_side api in
-  (* And only messages marked as not hidden from the docs, and non-internal fields *)
-  let api = filter (fun _ -> true) (fun f -> not f.internal_only) (fun m -> not m.msg_hide_from_docs) api in
+  (* And only messages marked as not hidden from the docs (unless overridden), and non-internal fields *)
+  let api = filter (fun _ -> true) (fun f -> not f.internal_only) (fun m -> !hidden || not m.msg_hide_from_docs) api in
 
   if (!markdown_mode) then
     Markdown_backend.all api !dirname;
