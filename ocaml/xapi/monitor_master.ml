@@ -92,18 +92,24 @@ let update_pifs ~__context host pifs =
             if !Xapi_globs.pass_through_pif_carrier then begin
               try
                 (* Go from physical interface -> bridge -> vif devices.
-                   					 * Do this for the physical network and any VLANs/tunnels on top of it. *)
-                let network = pifrec.API.pIF_network in
-                let vlan_networks = List.map (fun vlan ->
-                    let vlan_master = Db.VLAN.get_untagged_PIF ~__context ~self:vlan in
-                    Db.PIF.get_network ~__context ~self:vlan_master
-                  ) pifrec.API.pIF_VLAN_slave_of
+                   * Do this for the physical network and any VLANs/tunnels on top of it. *)
+                (*
+                let networks =
+                  let network = pifrec.API.pIF_network in
+                  let vlan_networks = List.map (fun vlan ->
+                      let vlan_master = Db.VLAN.get_untagged_PIF ~__context ~self:vlan in
+                      Db.PIF.get_network ~__context ~self:vlan_master
+                    ) pifrec.API.pIF_VLAN_slave_of
+                  in
+                  let tunnel_networks = List.map (fun tunnel ->
+                      let access_pif = Db.Tunnel.get_access_PIF ~__context ~self:tunnel in
+                      Db.PIF.get_network ~__context ~self:access_pif
+                    ) pifrec.API.pIF_tunnel_transport_PIF_of
+                  in
+                  network :: vlan_networks @ tunnel_networks
                 in
-                let tunnel_networks = List.map (fun tunnel ->
-                    let access_pif = Db.Tunnel.get_access_PIF ~__context ~self:tunnel in
-                    Db.PIF.get_network ~__context ~self:access_pif
-                  ) pifrec.API.pIF_tunnel_transport_PIF_of
-                in
+                
+
                 let bridges = List.map (fun network -> Db.Network.get_bridge ~__context ~self:network)
                     (network :: vlan_networks @ tunnel_networks) in
                 let dbg = Context.string_of_task __context in
@@ -118,6 +124,8 @@ let update_pifs ~__context host pifs =
                     Client.VIF.set_carrier dbg vif.vif carrier |> Xapi_xenops.sync __context queue_name
                   )
                 in List.iter set_carrier (List.filter_map vif_device_of_string ifs)
+                  *)
+                  ()
               with e ->
                 debug "Failed to update VIF carrier flags for PIF: %s" (ExnHelper.string_of_exn e)
             end;

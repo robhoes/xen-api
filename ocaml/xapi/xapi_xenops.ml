@@ -190,14 +190,19 @@ let firmware_of_vm vm =
         bad]))
   | exception Not_found -> default_firmware
 
-let varstore_rm_with_sandbox ~__context ~vm_uuid f =
+let varstore_rm_with_sandbox ~__context ~vm_uuid f = 
+()
+(*
   let dbg = Context.string_of_task __context in
   let domid = 0 in
   let chroot, socket_path = Xenops_sandbox.Varstore_guard.start dbg ~domid ~vm_uuid ~paths:[] in
   Xapi_stdext_pervasives.Pervasiveext.finally (fun () -> f chroot socket_path)
     (fun () -> Xenops_sandbox.Varstore_guard.stop dbg ~domid ~vm_uuid)
+*)
 
 let nvram_post_clone ~__context ~self ~uuid =
+()
+(*
   match Db.VM.get_NVRAM ~__context ~self with
   | [] -> ()
   | original ->
@@ -213,7 +218,7 @@ let nvram_post_clone ~__context ~self ~uuid =
         ; "-s"; socket_path ] |> ignore);
     if Db.VM.get_NVRAM ~__context ~self <> original then
       debug "VM %s: NVRAM changed due to clone" uuid
-
+*)
 let rtc_timeoffset_of_vm ~__context (vm, vm_t) vbds =
   let timeoffset = string vm_t.API.vM_platform "0" Vm_platform.timeoffset in
   (* If any VDI has on_boot = reset AND has a VDI.other_config:timeoffset
@@ -3177,6 +3182,20 @@ let vif_plug ~__context ~self =
        if not (Db.VIF.get_currently_attached ~__context ~self) then
          raise Api_errors.(Server_error(internal_error, [
              Printf.sprintf "vif_plug: Unable to plug VIF %s" (Ref.string_of self)]))
+    )
+
+let set_carrier ~__context ~self carrier =
+  let vm = Db.VIF.get_VM ~__context ~self in
+  let queue_name = queue_of_vm ~__context ~self:vm in
+  transform_xenops_exn ~__context ~vm queue_name
+    (fun () ->
+       assert_resident_on ~__context ~self:vm;
+       let vif = md_of_vif ~__context ~self in
+       info "xenops: VIF.set_carrier %s.%s" (fst vif.Vif.id) (snd vif.Vif.id);
+       let dbg = Context.string_of_task __context in
+       let module Client = (val make_client queue_name : XENOPS) in
+       Client.VIF.set_carrier dbg vif.Vif.id carrier |> sync_with_task __context queue_name;
+       Events_from_xenopsd.wait queue_name dbg (fst vif.Vif.id) ();
     )
 
 let vif_set_locking_mode ~__context ~self =

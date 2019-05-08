@@ -15,6 +15,7 @@ let () = Printf.ksprintf Jbuild_plugin.V1.send {|
   (libraries
     alcotest
     unix
+    xenctrl
     xapi_internal
     xapi-consts
     xapi-stdext-date

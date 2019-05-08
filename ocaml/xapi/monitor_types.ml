@@ -24,13 +24,11 @@ type pif = {
   pif_vendor_id: string;
   pif_device_id: string;
 }
-
+(*
 module Vif_device = struct
   type t = {
     pv: bool;
     vif: Xenops_interface.Vif.id;
-    domid: int;
-    devid: int;
   }
 end
 
@@ -43,11 +41,11 @@ let vif_device_of_string x =
     let uuid = Uuid.uuid_of_int_array di.Xenctrl.handle |> Uuid.to_string in
     let vif = (uuid, string_of_int devid) in
     match ty with
-    | "vif" -> Some { pv = true; vif = vif; domid = domid; devid = devid }
-    | "tap" -> Some { pv = false; vif = vif; domid = domid; devid = devid }
+    | "vif" -> Some { pv = true; vif = vif;}
+    | "tap" -> Some { pv = false; vif = vif; }
     | _ -> failwith "bad device"
   with _ -> None
-
+*)
 let find_rrd_files prefix =
   Sys.readdir Xapi_globs.metrics_root
   |> Array.to_list
