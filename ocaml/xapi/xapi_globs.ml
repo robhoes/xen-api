@@ -765,6 +765,8 @@ let disable_logging_for= ref []
 
 let nvidia_whitelist = ref "/usr/share/nvidia/vgpu/vgpuConfig.xml"
 
+let nvidia_sriov_manage_script = ref "/usr/lib/nvidia/sriov-manage"
+
 let igd_passthru_vendor_whitelist = ref []
 
 let gvt_g_whitelist = ref "/etc/gvt-g-whitelist"
