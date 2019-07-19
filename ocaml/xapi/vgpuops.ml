@@ -102,7 +102,13 @@ let add_pcis_to_vm ~__context host vm pci =
   (* Add a hotplug ordering (see pcidevs_of_pci) *)
   let devs : ((int * (int * int * int * int))) list = List.rev (snd (List.fold_left (fun (i, acc) pci -> i + 1, (i, pci) :: acc) (0, []) devs)) in
   (* Update VM other_config for PCI passthrough *)
-  let value = String.concat "," (List.map Pciops.to_string devs) in
+  let value =
+    Db.VM.get_other_config ~__context ~self:vm
+    |> (fun assoc -> try List.assoc Xapi_globs.vgpu_pci assoc with Not_found -> "")
+    |> ( function (* add to existing entry *)
+       | ""  -> String.concat "," (List.map Pciops.to_string devs)
+       | str -> String.concat "," (str :: List.map Pciops.to_string devs)
+       ) in
   debug "Adding PCIs to a VM with 'other config': %s" value;
   Db.VM.add_to_other_config ~__context ~self:vm ~key:Xapi_globs.vgpu_pci ~value
 
