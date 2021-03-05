@@ -1316,17 +1316,13 @@ let apply_guest_agent_config ~__context config =
 let create_metadata ~__context ~self =
   let vm = Db.VM.get_record ~__context ~self in
   let vbds =
-    List.filter
-      (fun vbd -> vbd.API.vBD_currently_attached)
-      (List.map (fun self -> Db.VBD.get_record ~__context ~self) vm.API.vM_VBDs)
+    List.map (fun self -> Db.VBD.get_record ~__context ~self) vm.API.vM_VBDs
   in
   let vbds' = List.map (fun vbd -> MD.of_vbd ~__context ~vm ~vbd) vbds in
   let vifs =
-    List.filter
-      (fun (_, vif) -> vif.API.vIF_currently_attached)
-      (List.map
+    List.map
          (fun self -> (self, Db.VIF.get_record ~__context ~self))
-         vm.API.vM_VIFs)
+         vm.API.vM_VIFs
   in
   let vifs' = List.map (fun vif -> MD.of_vif ~__context ~vm ~vif) vifs in
   let pcis = MD.pcis_of_vm ~__context (self, vm) in
@@ -2352,12 +2348,12 @@ let update_vbd ~__context (id : string * string) =
                       ) else
                         error "VBD %s.%s is empty but is not a CD" (fst id)
                           (snd id)
-              ) ;
+              ) (* ;
               if not (state.Vbd.plugged || state.Vbd.active) then (
                 debug "VBD.remove %s.%s" (fst id) (snd id) ;
                 try Client.VBD.remove dbg id
                 with e -> debug "VBD.remove failed: %s" (Printexc.to_string e)
-              ))
+              )*))
             info ;
           Xenops_cache.update_vbd id (Option.map snd info) ;
           Xapi_vbd_helpers.update_allowed_operations ~__context ~self:vbd ;
@@ -2407,10 +2403,11 @@ let update_vif ~__context id =
                 ( try Xapi_network.deregister_vif ~__context vif
                   with e ->
                     error "Failed to deregister vif: %s" (Printexc.to_string e)
-                ) ;
+                ) (* ;
                 debug "VIF.remove %s.%s" (fst id) (snd id) ;
                 try Client.VIF.remove dbg id
                 with e -> debug "VIF.remove failed: %s" (Printexc.to_string e)
+                *)
               ) ;
               ( match backend_of_vif ~__context ~vif with
               | Network.Sriov _ ->
@@ -3454,6 +3451,7 @@ let start ~__context ~self paused force =
       maybe_refresh_vm ~__context ~self ;
       (* For all devices which we want xenopsd to manage, set currently_attached = true
          so the metadata is pushed. *)
+      (*
       let empty_vbds_allowed = Helpers.will_have_qemu ~__context ~self in
       let vbds =
         (* xenopsd only manages empty VBDs for HVM guests *)
@@ -3463,16 +3461,7 @@ let start ~__context ~self paused force =
         else
           List.filter (fun self -> not (Db.VBD.get_empty ~__context ~self)) vbds
       in
-      List.iter
-        (fun self -> Db.VBD.set_currently_attached ~__context ~self ~value:true)
-        vbds ;
-      List.iter
-        (fun self -> Db.VIF.set_currently_attached ~__context ~self ~value:true)
-        (Db.VM.get_VIFs ~__context ~self) ;
-      List.iter
-        (fun self ->
-          Db.VUSB.set_currently_attached ~__context ~self ~value:true)
-        (Db.VM.get_VUSBs ~__context ~self) ;
+        *)
       let module Client = (val make_client queue_name : XENOPS) in
       debug "Sending VM %s configuration to xenopsd" (Ref.string_of self) ;
       try
@@ -3685,11 +3674,25 @@ let resume ~__context ~self ~start_paused ~force =
             Server_error (vm_has_no_suspend_vdi, ["VM"; Ref.string_of self]))
       ) ;
       let d = disk_of_vdi ~__context ~self:vdi |> Option.get in
+      let devices =
+        let vm = Db.VM.get_record ~__context ~self in
+        let vbds =
+          List.map (fun self -> Db.VBD.get_record ~__context ~self) vm.API.vM_VBDs
+          |> List.filter (fun vbd -> vbd.API.vBD_currently_attached)
+          |> List.map (fun vbd -> let md = MD.of_vbd ~__context ~vm ~vbd in Metadata.Vbd md.Vbd.id)
+        in
+        let vifs =
+          List.map (fun self -> self, Db.VIF.get_record ~__context ~self) vm.API.vM_VIFs
+          |> List.filter (fun (_, vif) -> vif.API.vIF_currently_attached)
+          |> List.map (fun vif -> let md = MD.of_vif ~__context ~vm ~vif in Metadata.Vif md.Vif.id)
+        in
+        vbds @ vifs
+      in
       let module Client = (val make_client queue_name : XENOPS) in
       (* NB we don't set resident_on because we don't want to
-         			   modify the VM.power_state, {VBD,VIF}.currently_attached in the
-         			   failures cases. This means we must remove the metadata from
-         			   xenopsd on failure. *)
+         modify the VM.power_state, {VBD,VIF}.currently_attached in the
+         failures cases. This means we must remove the metadata from
+         xenopsd on failure. *)
       ( try
           Events_from_xenopsd.with_suppressed queue_name dbg vm_id (fun () ->
               debug "Sending VM %s configuration to xenopsd"
@@ -3699,7 +3702,7 @@ let resume ~__context ~self ~start_paused ~force =
                 (fun () ->
                   info "xenops: VM.resume %s from %s" id
                     (d |> rpc_of disk |> Jsonrpc.to_string) ;
-                  Client.VM.resume dbg id d
+                  Client.VM.resume dbg id d devices
                   |> sync_with_task __context ~cancellable:false queue_name ;
                   if not start_paused then (
                     info "xenops: VM.unpause %s" id ;
