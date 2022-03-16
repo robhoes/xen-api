@@ -3550,7 +3550,15 @@ let set_backend m =
   (* start the internal event thread *)
   internal_event_thread := Some (Thread.create internal_event_thread_body ()) ;
   let module B = (val get_backend () : S) in
-  B.init ()
+  B.init () ;
+  (* upgrade internal VM state (set_internal_state contains upgrade code) *)
+  List.iter
+    (fun vm ->
+      let vm_t = VM_DB.read_exn vm in
+      B.VM.get_internal_state [] [] vm_t
+      |> B.VM.set_internal_state vm_t
+    )
+    (VM_DB.ids ())
 
 let register_objects () =
   (* Make sure all objects are 'registered' with the updates system *)
