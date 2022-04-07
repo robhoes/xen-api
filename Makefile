@@ -140,10 +140,11 @@ install: build doc sdk doc-json
 # rrd-transport
 	install -D _build/install/default/bin/rrdreader $(DESTDIR)/usr/bin/rrdreader
 	install -D _build/install/default/bin/rrdwriter $(DESTDIR)/usr/bin/rrdwriter
-# rrdd-plugins
+# rrdd-plugins/gpumon
 	install -D -m 755 _build/install/default/bin/xcp-rrdd-iostat $(DESTDIR)$(LIBEXECDIR)/xcp-rrdd-plugins/xcp-rrdd-iostat
 	install -D -m 755 _build/install/default/bin/xcp-rrdd-squeezed $(DESTDIR)$(LIBEXECDIR)/xcp-rrdd-plugins/xcp-rrdd-squeezed
 	install -D -m 755 _build/install/default/bin/xcp-rrdd-xenpm $(DESTDIR)$(LIBEXECDIR)/xcp-rrdd-plugins/xcp-rrdd-xenpm
+	install -D -m 755 _build/install/default/bin/gpumon $(DESTDIR)$(LIBEXECDIR)/xcp-rrdd-plugins/xcp-rrdd-gpumon
 	install -D -m 644 ocaml/xcp-rrdd/bugtool-plugin/rrdd-plugins.xml $(DESTDIR)$(ETCXENDIR)/bugtool/xcp-rrdd-plugins.xml
 	install -D -m 644 ocaml/xcp-rrdd/bugtool-plugin/rrdd-plugins/stuff.xml $(DESTDIR)$(ETCXENDIR)/bugtool/xcp-rrdd-plugins/stuff.xml
 	install -D -m 755 ocaml/xcp-rrdd/bin/rrdp-scripts/sysconfig-rrdd-plugins $(DESTDIR)/etc/sysconfig/xcp-rrdd-plugins
