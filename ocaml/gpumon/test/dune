@@ -1,0 +1,4 @@
+(test
+ (name test_main)
+ (deps (source_tree data))
+ (libraries gpumon_lib oUnit))
