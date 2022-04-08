@@ -43,6 +43,8 @@ type vgpu_instance = int
 
 type vm_domid = string
 
+type vgpu_uuid = string
+
 type vgpu_compatibility_t = unit
 
 type vm_compat = None | Cold | Hybernate | Sleep | Live

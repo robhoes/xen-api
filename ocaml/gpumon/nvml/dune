@@ -1,0 +1,4 @@
+(library
+ (name nvml)
+ (wrapped false)
+ (virtual_modules nvml))

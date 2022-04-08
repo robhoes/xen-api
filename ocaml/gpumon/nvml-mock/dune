@@ -1,0 +1,3 @@
+(library
+ (name nvml_mock)
+ (implements nvml))

@@ -1,6 +1,6 @@
 (library
- (name nvml_stubs)
- (wrapped false)
+ (name nvml_real)
+ (implements nvml)
  (foreign_stubs
   (language c)
   (names nvml_stubs)))
