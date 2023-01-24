@@ -530,12 +530,11 @@ module SMAPIv1 : Server_impl = struct
                   [
                     XenDisk
                       {
-                        params= attach_info_v1.Smint.params
+                        params= attach_info_v1.Smint.params_nbd
                       ; extra= attach_info_v1.Smint.xenstore_data
                       ; backend_type= "vbd3"
                       }
-                  ; (* Currently we always get a BlockDevice from SMAPIv1, never a File, not even for ISOs *)
-                    BlockDevice {path= attach_info_v1.Smint.params}
+                  ; Nbd {uri= attach_info_v1.Smint.params_nbd}
                   ]
               }
           )
