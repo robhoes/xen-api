@@ -183,14 +183,21 @@ let vhd_of_device path =
   find_backend_device path |> Option.value ~default:path |> tapdisk_of_path
 
 let send progress_cb ?relative_to (protocol : string) (dest_format : string)
-    (s : Unix.file_descr) (path : string) (prefix : string) =
+    (s : Unix.file_descr) (path : string) (size : Int64.t) (prefix : string) =
   let s' = Uuidx.(to_string (make ())) in
   let source_format, source =
-    match vhd_of_device path with
-    | Some vhd ->
-        ("hybrid", path ^ ":" ^ vhd)
-    | None ->
-        ("raw", path)
+    match Stream_vdi.get_nbd_device path with
+    | None -> (
+      match vhd_of_device path with
+      | Some vhd ->
+          ("hybrid", path ^ ":" ^ vhd)
+      | None ->
+          ("raw", path)
+    )
+    | Some (nbd_server, exportname) ->
+        ( "nbdhybrid"
+        , Printf.sprintf "%s:%s:%s:%Ld" path nbd_server exportname size
+        )
   in
   let relative_to =
     match relative_to with
