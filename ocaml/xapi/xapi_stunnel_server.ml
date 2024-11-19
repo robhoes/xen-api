@@ -76,7 +76,9 @@ end = struct
               sprintf "TIMEOUTidle = %s" x
           )
         ; Stunnel.debug_conf_of_env ()
-        ; "protocol = proxy" (* tells stunnel to include inet address info *)
+          (*
+        ; "protocol = proxy"  tells stunnel to include inet address info
+        *)
         ; ""
         ; "[xapi]"
         ; sprintf "accept = %s%d" accept !Constants.https_port
