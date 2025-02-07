@@ -233,7 +233,16 @@ let get_poll_timeout =
 
 let real_proxy' ~__context ~vm vnc_port s =
   try
+    (*let headers =
+        [
+          (Http.Hdr.connection, "keep-alive")
+        ; (Http.Hdr.cache_control, "no-cache, no-store")
+        ]
+      in
+      Http_svr.response2 reqd headers "" ;
+    *)
     Http_svr.headers s (Http.http_200_ok ()) ;
+
     let vnc_sock =
       match vnc_port with
       | Port x ->
@@ -280,7 +289,7 @@ let respond_console_limit_exceeded req s vm_id connected_users =
   in
   Http_svr.response_custom_error ~req s "503" "Connection Limit Exceeded" body
 
-let real_proxy __context vm req _ vnc_port s =
+let real_proxy __context vm req _ vnc_port s _reqd =
   let vm_id = Ref.string_of vm in
   let pool = Helpers.get_pool ~__context in
   let is_limit_enabled =
@@ -303,7 +312,7 @@ let go_if_no_limit __context s f =
   else
     f ()
 
-let ws_proxy __context _ req protocol address s =
+let ws_proxy __context _ req protocol address s _ =
   go_if_no_limit __context s @@ fun () ->
   let addr = match address with Port p -> string_of_int p | Path p -> p in
   let protocol =
@@ -434,7 +443,7 @@ let check_vm_is_running_here __context console =
 
 (* GET /console_uri?ref=.....
    Cookie: <session id> *)
-let handler proxy_fn (req : Request.t) s _ =
+let handler proxy_fn (req : Request.t) s (reqd : Http_svr.reqd) =
   req.Request.close <- true ;
   Xapi_http.with_context "Connection to VM console" req s (fun __context ->
       let console = console_of_request __context req in
@@ -449,7 +458,7 @@ let handler proxy_fn (req : Request.t) s _ =
       match address_of_console __context console with
       | Some vnc_port ->
           let vm = Db.Console.get_VM ~__context ~self:console in
-          proxy_fn __context vm req protocol vnc_port s
+          proxy_fn __context vm req protocol vnc_port s reqd
       | None ->
           Http_svr.headers s (Http.http_404_missing ())
   )
