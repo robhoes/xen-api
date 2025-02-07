@@ -817,7 +817,7 @@ let master_only_http_handlers =
   ]
 
 let common_http_handlers () =
-  let handlers =
+  let handlers : (string * Http_svr.handler) list =
     [
       ("get_services_xenops", Xapi_services.get_handler)
     ; ("put_services_xenops", Xapi_services.put_handler)
@@ -885,7 +885,7 @@ let listen_unix_socket sock_path =
   Unixext.unlink_safe sock_path ;
   let domain_sock = Xapi_http.bind (Unix.ADDR_UNIX sock_path) in
   ignore
-    (Http_svr.start
+    (Http_svr.start2
        ~conn_limit:!Xapi_globs.conn_limit_unix
        Xapi_http.server domain_sock
     )

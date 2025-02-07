@@ -28,13 +28,22 @@ type handler = {
 
 let handler_by_thread (h : handler) (s : Unix.file_descr)
     (caller : Unix.sockaddr) =
-  Thread.create
-    (fun () ->
-      Fun.protect
-        ~finally:(fun () -> Semaphore.Counting.release h.lock)
-        (Debug.with_thread_named h.name (fun () -> h.body caller s))
-    )
-    ()
+  let _ =
+    Thread.create
+      (fun () ->
+        Fun.protect
+          ~finally:(fun () -> Semaphore.Counting.release h.lock)
+          (Debug.with_thread_named h.name (fun () -> h.body caller s))
+      )
+      ()
+  in
+  ()
+
+let handler_no_thread (h : handler) (s : Unix.file_descr)
+    (caller : Unix.sockaddr) =
+  Fun.protect
+    ~finally:(fun () -> Semaphore.Counting.release h.lock)
+    (Debug.with_thread_named h.name (fun () -> h.body caller s))
 
 (** Function with the main accept loop *)
 
@@ -79,7 +88,7 @@ let establish_server ?(signal_fds = []) forker handler sock =
 
 type server = {shutdown: unit -> unit}
 
-let server handler sock =
+let server ~by_thread handler sock =
   let status_out, status_in = Unix.pipe () in
   let toclose = ref [sock; status_in; status_out] in
   let close' fd =
@@ -91,14 +100,18 @@ let server handler sock =
     ) else
       warn "Attempt to double-shutdown Server_io.server detected; ignoring"
   in
+  let forker =
+    if by_thread then
+      handler_by_thread
+    else
+      handler_no_thread
+  in
   let thread =
     Thread.create
       (fun () ->
         Debug.with_thread_named handler.name
           (fun () ->
-            try
-              establish_server ~signal_fds:[status_out] handler_by_thread
-                handler sock
+            try establish_server ~signal_fds:[status_out] forker handler sock
             with PleaseClose -> debug "Server thread exiting"
           )
           ()

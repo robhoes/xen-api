@@ -66,8 +66,10 @@ module Stats = struct
     )
 end
 
+type reqd = H1_reqd of Httpun.Reqd.t | H2_reqd of H2.Reqd.t | No_reqd
+
 (** Type of a function which can handle a Request.t *)
-type 'a handler = Http.Request.t -> Unix.file_descr -> 'a -> unit
+type handler = Http.Request.t -> Unix.file_descr -> reqd -> unit
 
 (* try and do f (unit -> unit), ignore exceptions *)
 let best_effort f = try f () with _ -> ()
@@ -299,7 +301,7 @@ let default_callback req fd _ =
   req.Request.close <- true
 
 module TE = struct
-  type 'a t = {stats: Stats.t; stats_m: Mutex.t; handler: 'a handler}
+  type t = {stats: Stats.t; stats_m: Mutex.t; handler: handler}
 
   let empty () =
     {stats= Stats.empty (); stats_m= Mutex.create (); handler= default_callback}
@@ -312,12 +314,9 @@ module MethodMap = Map.Make (struct
 end)
 
 module Server = struct
-  type 'a t = {
-      mutable handlers: 'a TE.t Radix_tree.t MethodMap.t
-    ; default_context: 'a
-  }
+  type t = {mutable handlers: TE.t Radix_tree.t MethodMap.t}
 
-  let empty default_context = {handlers= MethodMap.empty; default_context}
+  let empty () = {handlers= MethodMap.empty}
 
   let add_handler x ty path handler =
     let existing =
@@ -522,7 +521,7 @@ let read_request ?proxy_seen ~read_timeout ~total_timeout ~max_length fd =
     ) ;
     (None, None)
 
-let handle_one (x : 'a Server.t) ss context req =
+let handle_one (x : Server.t) ss req =
   let@ req = Helper.with_tracing ~name:__FUNCTION__ req in
   let span = Helper.traceparent_of req in
   let finished = ref false in
@@ -538,7 +537,7 @@ let handle_one (x : 'a Server.t) ss context req =
         (Radix_tree.longest_prefix req.Request.path method_map)
     in
     let@ _ = Tracing.with_child_trace span ~name:"handler" in
-    te.TE.handler req ss context ;
+    te.TE.handler req ss No_reqd ;
     finished := req.Request.close ;
     Stats.update te.TE.stats te.TE.stats_m req ;
     !finished
@@ -572,7 +571,7 @@ let handle_one (x : 'a Server.t) ss context req =
     !finished
 
 let handle_connection ~header_read_timeout ~header_total_timeout
-    ~max_header_length (x : 'a Server.t) caller ss =
+    ~max_header_length (x : Server.t) caller ss =
   ( match caller with
   | Unix.ADDR_UNIX _ ->
       debug "Accepted unix connection"
@@ -596,11 +595,7 @@ let handle_connection ~header_read_timeout ~header_total_timeout
     Http.Request.with_originator_of req Tgroup.of_req_originator ;
 
     (* 2. now we attempt to process the request *)
-    let finished =
-      Option.fold ~none:true
-        ~some:(handle_one x ss x.Server.default_context)
-        req
-    in
+    let finished = Option.fold ~none:true ~some:(handle_one x ss) req in
     (* 3. do it again if the connection is kept open, but without timeouts *)
     if not finished then loop ~read_timeout:None ~total_timeout:None proxy
   in
@@ -608,6 +603,190 @@ let handle_connection ~header_read_timeout ~header_total_timeout
     None ;
   debug "Closing connection" ;
   Unix.close ss
+
+let req_of_r version meth target headers_fold =
+  let m =
+    match meth with
+    | `POST ->
+        Http.Post
+    | `GET ->
+        Http.Get
+    | `PUT ->
+        Http.Put
+    | `CONNECT ->
+        Http.Connect
+    | `OPTIONS ->
+        Http.Options
+    | `DELETE ->
+        Http.Unknown "DELETE"
+    | `HEAD ->
+        Http.Unknown "HEAD"
+    | `TRACE ->
+        Http.Unknown "TRACE"
+    | `Other m ->
+        Http.Unknown m
+  in
+  let kvlist_flatten ls =
+    (* Uri.query splits the value string into several if they are separated
+       with commas. Like this: "?k=v1,v2,v3" -> [("k", ["v1";"v2";"v3"])]
+       This function concatenates these back. It will not concatenate values
+       entered for duplicate keys, as these will be separate tuples:
+       "?k=v1,v2,v3&k=v4" ->  [("k", ["v1"; "v2"; "v3"]); ("k", ["v4"])] *)
+    List.map (fun (k, vs) -> (k, Astring.String.concat ~sep:"," vs)) ls
+  in
+  let uri_t = Uri.of_string target in
+  if uri_t = Uri.empty then raise Http_parse_failure ;
+  let path = Uri.path_unencoded uri_t in
+  let query = Uri.query uri_t |> kvlist_flatten in
+  let close = false in
+  let req = {Http.Request.empty with m; path; query; version; close} in
+  headers_fold
+    ~f:(fun k v (req : Http.Request.t) ->
+      let k = lowercase k in
+      let v = String.trim v in
+      debug "HEADER: %s: %s" k v ;
+      match k with
+      | k when k = Http.Hdr.content_length ->
+          {req with content_length= Some (Int64.of_string v)}
+      | k when k = Http.Hdr.cookie ->
+          {req with cookie= Http.parse_cookies v}
+      | k when k = Http.Hdr.transfer_encoding ->
+          {req with transfer_encoding= Some v}
+      | k when k = Http.Hdr.accept ->
+          {req with accept= Some v}
+      | k when k = Http.Hdr.authorization ->
+          {req with auth= Some (authorization_of_string v)}
+      | k when k = Http.Hdr.task_id ->
+          {req with task= Some v}
+      | k when k = Http.Hdr.subtask_of ->
+          {req with subtask_of= Some v}
+      | k when k = Http.Hdr.content_type ->
+          {req with content_type= Some v}
+      | k when k = Http.Hdr.host ->
+          {req with host= Some v}
+      | k when k = Http.Hdr.user_agent ->
+          {req with user_agent= Some v}
+      | k when k = Http.Hdr.connection && lowercase v = "close" ->
+          {req with close= true}
+      | k when k = Http.Hdr.connection && lowercase v = "keep-alive" ->
+          {req with close= false}
+      | _ ->
+          {req with additional_headers= (k, v) :: req.additional_headers}
+    )
+    ~init:req
+
+let route x req ss rd =
+  let method_map =
+    try MethodMap.find req.Http.Request.m x.Server.handlers
+    with Not_found -> raise Method_not_implemented
+  in
+  let empty = TE.empty () in
+  let te =
+    Option.value ~default:empty
+      (Radix_tree.longest_prefix req.Http.Request.path method_map)
+  in
+  Stats.update te.TE.stats te.TE.stats_m req ;
+  te.TE.handler req ss rd
+
+module Http2 = struct
+  open H2
+
+  let connection_handler :
+         Server.t
+      -> Unix.file_descr
+      -> Httpun.Request.t
+      -> Bigstringaf.t H2.IOVec.t list
+      -> (Server_connection.t, string) result =
+    let error_handler ?request:_ error start_response =
+      let response_body = start_response Headers.empty in
+      ( match error with
+      | `Exn exn ->
+          Body.Writer.write_string response_body (Printexc.to_string exn) ;
+          Body.Writer.write_string response_body "\n"
+      | #Status.standard as error ->
+          Body.Writer.write_string response_body
+            (Status.default_reason_phrase error)
+      ) ;
+      Body.Writer.close response_body
+    in
+    let request_handler x ss : H2.Server_connection.request_handler =
+     fun reqd ->
+      let open H2 in
+      let req =
+        let r = Reqd.request reqd in
+        req_of_r "2" r.Request.meth r.Request.target
+          (Headers.fold r.Request.headers)
+      in
+      D.debug "Request %s" (Http.Request.to_string req) ;
+      route x req ss (H2_reqd reqd)
+    in
+    fun x ss http_request request_body ->
+      let {Httpun.Request.headers; target; meth; _} = http_request in
+      H2.Server_connection.create_h2c ?config:None ~headers ~target ~meth
+        ~request_body ~error_handler (request_handler x ss)
+end
+
+let error_handler (_ : Unix.sockaddr) ?request:_ error start_response =
+  let open Httpun in
+  let response_body = start_response Headers.empty in
+  ( match error with
+  | `Exn exn ->
+      Body.Writer.write_string response_body (Printexc.to_string exn) ;
+      Body.Writer.write_string response_body "\n"
+  | #Status.standard as error ->
+      Body.Writer.write_string response_body (Status.default_reason_phrase error)
+  ) ;
+  Body.Writer.close response_body
+
+let upgrade_handler x ss request body upgrade () =
+  let connection =
+    Stdlib.Result.get_ok (Http2.connection_handler x ss request body)
+  in
+  upgrade (Gluten.make (module H2.Server_connection) connection)
+
+let request_handler x ss _addr (reqd : Httpun.Reqd.t Gluten.reqd) =
+  let open Httpun in
+  let {Gluten.reqd; upgrade} = reqd in
+  let request = Reqd.request reqd in
+
+  match Headers.get request.Request.headers "Connection" with
+  | Some "Upgrade, HTTP2-Settings" ->
+      debug "HTTP1 -> 2 upgrade" ;
+      let request_body = Reqd.request_body reqd in
+      let body = ref [] in
+      let rec on_read buffer ~off ~len =
+        body := {H2.IOVec.buffer; off; len} :: !body ;
+        Body.Reader.schedule_read request_body ~on_eof ~on_read
+      and on_eof () =
+        let headers =
+          Headers.of_list [("Connection", "Upgrade"); ("Upgrade", "h2c")]
+        in
+        Reqd.respond_with_upgrade reqd headers
+          (upgrade_handler x ss request !body upgrade)
+      in
+      debug "scheduling body ready" ;
+      Body.Reader.schedule_read request_body ~on_eof ~on_read
+  | _ ->
+      debug "HTTP1 (no upgrade)" ;
+      let req =
+        let r = Reqd.request reqd in
+        req_of_r "1.1" r.Request.meth r.Request.target
+          (Headers.fold r.Request.headers)
+      in
+      D.debug "Request %s" (Http.Request.to_string req) ;
+      route x req ss (H1_reqd reqd)
+
+let handle_connection2 (x : Server.t) caller ss =
+  ( match caller with
+  | Unix.ADDR_UNIX _ ->
+      debug "Accepted unix connection"
+  | Unix.ADDR_INET (addr, port) ->
+      debug "Accepted inet connection from %s:%d"
+        (Unix.string_of_inet_addr addr)
+        port
+  ) ;
+  Httpun_unix.Server.create_connection_handler
+    ~request_handler:(request_handler x ss) ~error_handler caller ss
 
 let bind ?(listen_backlog = 128) sockaddr name =
   let domain =
@@ -674,7 +853,7 @@ type socket = Unix.file_descr * string
 
 (* Start an HTTP server on a new socket *)
 let start ?header_read_timeout ?header_total_timeout ?max_header_length
-    ~conn_limit (x : 'a Server.t) (socket, name) =
+    ~conn_limit (x : Server.t) (socket, name) =
   let handler =
     {
       Server_io.name
@@ -684,7 +863,19 @@ let start ?header_read_timeout ?header_total_timeout ?max_header_length
     ; lock= Semaphore.Counting.make conn_limit
     }
   in
-  let server = Server_io.server handler socket in
+  let server = Server_io.server ~by_thread:true handler socket in
+  Hashtbl.add socket_table socket server
+
+(* Start an HTTP server on a new socket *)
+let start2 ~conn_limit (x : Server.t) (socket, name) =
+  let handler =
+    {
+      Server_io.name
+    ; body= handle_connection2 x
+    ; lock= Semaphore.Counting.make conn_limit
+    }
+  in
+  let server = Server_io.server ~by_thread:false handler socket in
   Hashtbl.add socket_table socket server
 
 exception Socket_not_found
@@ -716,6 +907,87 @@ let read_body ?limit req fd =
         )
         limit ;
       Unixext.really_read_string fd length
+
+let read_body2_h1 reqd callback =
+  let open Httpun in
+  let request_body = Reqd.request_body reqd in
+  let body = Buffer.create 1024 in
+  let rec on_read buffer ~off ~len =
+    debug "on_read" ;
+    let fragment = Bytes.create len in
+    Bigstringaf.blit_to_bytes buffer ~src_off:off fragment ~dst_off:0 ~len ;
+    debug "on_read: %s" (Bytes.to_string fragment) ;
+    Buffer.add_bytes body fragment ;
+    Body.Reader.schedule_read request_body ~on_eof ~on_read
+  and on_eof () =
+    debug "EOF; calling back" ;
+    let b = Buffer.contents body in
+    debug "BODY: %s" b ; callback b
+  in
+  debug "scheduling body ready" ;
+  Body.Reader.schedule_read request_body ~on_eof ~on_read
+
+let read_body2_h2 reqd callback =
+  let open H2 in
+  let request_body = Reqd.request_body reqd in
+  let body = Buffer.create 1024 in
+  let rec on_read buffer ~off ~len =
+    debug "on_read" ;
+    let fragment = Bytes.create len in
+    Bigstringaf.blit_to_bytes buffer ~src_off:off fragment ~dst_off:0 ~len ;
+    debug "on_read: %s" (Bytes.to_string fragment) ;
+    Buffer.add_bytes body fragment ;
+    Body.Reader.schedule_read request_body ~on_eof ~on_read
+  and on_eof () =
+    debug "EOF; calling back" ;
+    let b = Buffer.contents body in
+    debug "BODY: %s" b ; callback b
+  in
+  debug "scheduling body ready" ;
+  Body.Reader.schedule_read request_body ~on_eof ~on_read
+
+let read_body2 reqd callback =
+  match reqd with
+  | H1_reqd r ->
+      read_body2_h1 r callback
+  | H2_reqd r ->
+      read_body2_h2 r callback
+  | No_reqd ->
+      ()
+
+let response2_h1 reqd headers s =
+  let open Httpun in
+  let headers =
+    headers |> Headers.of_list |> fun h ->
+    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
+    if s <> "" then
+      Headers.add_unless_exists h Http.Hdr.content_length
+        (String.length s |> string_of_int)
+    else
+      h
+  in
+  let response = Response.create ~headers `OK in
+  Reqd.respond_with_string reqd response s
+
+let response2_h2 reqd headers s =
+  let open H2 in
+  let headers =
+    headers |> Headers.of_list |> fun h ->
+    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
+    Headers.add_unless_exists h Http.Hdr.content_length
+      (String.length s |> string_of_int)
+  in
+  let response = Response.create ~headers `OK in
+  Reqd.respond_with_string reqd response s
+
+let response2 reqd headers s =
+  match reqd with
+  | H1_reqd r ->
+      response2_h1 r headers s
+  | H2_reqd r ->
+      response2_h2 r headers s
+  | No_reqd ->
+      ()
 
 (* Helpers to determine the client of a call *)
 

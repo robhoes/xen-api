@@ -109,7 +109,7 @@ let start (xmlrpc_path, http_fwd_path) process =
             |> Http.Request.t_of_rpc
           in
           req.Http.Request.close <- true ;
-          ignore (Http_svr.handle_one server received_fd () req : bool)
+          ignore (Http_svr.handle_one server received_fd req : bool)
         )
         (fun _ -> Unix.close received_fd)
   ) ;
@@ -497,7 +497,7 @@ let () =
       )
       ()
   in
-  start (!Rrd_interface.default_path, !Rrd_interface.forwarded_path) (fun () ->
+  start (!Rrd_interface.default_path, !Rrd_interface.forwarded_path) (fun _ ->
       Idl.Exn.server Rrdd_bindings.Server.implementation
   ) ;
   let _ : Thread.t = Discover.start [] in

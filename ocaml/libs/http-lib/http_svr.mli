@@ -17,8 +17,11 @@
 (** A URI path used to index handlers *)
 type uri_path = string
 
+(** Request descriptor used to read from and respond to a request *)
+type reqd
+
 (** A handler is a function which takes a request and produces a response *)
-type 'a handler = Http.Request.t -> Unix.file_descr -> 'a -> unit
+type handler = Http.Request.t -> Unix.file_descr -> reqd -> unit
 
 module Stats : sig
   (** Statistics recorded per-handler *)
@@ -30,20 +33,20 @@ module Stats : sig
 
 module Server : sig
   (** Represents an HTTP server with a set of handlers and set of listening sockets *)
-  type 'a t
+  type t
 
-  val empty : 'a -> 'a t
+  val empty : unit -> t
   (** An HTTP server which sends back a default error response to every request *)
 
-  val add_handler : 'a t -> Http.method_t -> uri_path -> 'a handler -> unit
+  val add_handler : t -> Http.method_t -> uri_path -> handler -> unit
   (** [add_handler x m uri h] adds handler [h] to server [x] to serve all requests with
       		method [m] for URI prefix [uri] *)
 
-  val find_stats : 'a t -> Http.method_t -> uri_path -> Stats.t option
+  val find_stats : t -> Http.method_t -> uri_path -> Stats.t option
   (** [find_stats x m uri] returns stats associated with method [m] and uri [uri]
       		in server [x], or None if none exist *)
 
-  val all_stats : 'a t -> (Http.method_t * uri_path * Stats.t) list
+  val all_stats : t -> (Http.method_t * uri_path * Stats.t) list
   (** [all_stats x] returns a list of (method, uri, stats) triples *)
 end
 
@@ -64,11 +67,13 @@ val start :
   -> ?header_total_timeout:float
   -> ?max_header_length:int
   -> conn_limit:int
-  -> 'a Server.t
+  -> Server.t
   -> socket
   -> unit
 
-val handle_one : 'a Server.t -> Unix.file_descr -> 'a -> Http.Request.t -> bool
+val start2 : conn_limit:int -> Server.t -> socket -> unit
+
+val handle_one : Server.t -> Unix.file_descr -> Http.Request.t -> bool
 
 exception Socket_not_found
 
@@ -125,6 +130,10 @@ val respond_to_options : Http.Request.t -> Unix.file_descr -> unit
 val headers : Unix.file_descr -> string list -> unit
 
 val read_body : ?limit:int -> Http.Request.t -> Unix.file_descr -> string
+
+val read_body2 : reqd -> (string -> unit) -> unit
+
+val response2 : reqd -> (string * string) list -> string -> unit
 
 (* Helpers to determine the client of a call *)
 

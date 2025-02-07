@@ -150,6 +150,8 @@
   hex
   http_lib
   httpsvr
+  httpun
+  h2
   ipaddr
   ipaddr.unix
   magic-mime

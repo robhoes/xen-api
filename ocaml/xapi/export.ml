@@ -808,7 +808,7 @@ let include_dom0_from_request req = bool_from_request req true "include_dom0"
 let excluded_devices_from_request req =
   devicetypelist_from_request req [] "excluded_device_types"
 
-let metadata_handler (req : Request.t) s _ =
+let metadata_handler (req : Request.t) s reqd =
   debug "metadata_handler called" ;
   req.Request.close <- true ;
   (* Xapi_http.with_context always completes the task at the end *)
@@ -884,19 +884,19 @@ let metadata_handler (req : Request.t) s _ =
       Unix.close read_fd ;
       match !export_error with
       | None ->
-          let content_length = String.length tar_data in
           let headers =
-            Http.http_200_ok ~keep_alive:false ~version:"1.0" ()
-            @ [
-                Http.Hdr.task_id ^ ": " ^ task_id
-              ; "Server: " ^ Xapi_version.xapi_user_agent
-              ; content_type
-              ; "Content-Length: " ^ string_of_int content_length
-              ; "Content-Disposition: attachment; filename=\"export.xva\""
-              ]
+            [
+              (Http.Hdr.task_id, task_id)
+            ; ("server", Xapi_version.xapi_user_agent)
+            ; (Http.Hdr.content_type, "application/octet-stream")
+            ; ( Http.Hdr.content_disposition
+              , "attachment; filename=\"export.xva\""
+              )
+            ; (Http.Hdr.connection, "close")
+            ; (Http.Hdr.cache_control, "no-cache, no-store")
+            ]
           in
-          Http_svr.headers s headers ;
-          Unixext.really_write_string s tar_data
+          Http_svr.response2 reqd headers tar_data
       | Some e ->
           let response_string = Http.Response.(to_wire_string internal_error) in
           Unixext.really_write_string s response_string ;

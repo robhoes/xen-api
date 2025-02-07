@@ -51,7 +51,13 @@
  (modules http_svr http_proxy server_io)
  (libraries
   astring
+  bigstringaf
+  gluten
   http_lib
+  httpun
+  httpun-types
+  httpun_unix
+  h2
   ipaddr
   polly
   tgroup

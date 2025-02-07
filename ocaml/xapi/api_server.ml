@@ -98,14 +98,13 @@ let create_thumbprint_header req response =
   )
 
 (** HTML callback that dispatches an RPC and returns the response. *)
-let callback is_json req fd _ =
+
+let callback is_json req fd reqd =
   let@ req = Helper.with_tracing ~name:__FUNCTION__ req in
   let span = Helper.traceparent_of req in
-  (* fd only used for writing *)
-  let body =
-    Http_svr.read_body ~limit:Constants.http_limit_max_rpc_size req fd
-  in
   try
+    (* TODO: add back ~limit:Constants.http_limit_max_rpc_size *)
+    Http_svr.read_body2 reqd @@ fun body ->
     let rpc =
       let attributes = [("size", string_of_int (String.length body))] in
       let@ _ =
@@ -128,21 +127,17 @@ let callback is_json req fd _ =
         Xmlrpc.string_of_response response
     in
     let thumbprint_header = create_thumbprint_header req response in
-    Http_svr.response_fct req
-      ~hdrs:
-        ((Http.Hdr.content_type, "text/xml")
-        :: ("Access-Control-Allow-Origin", "*")
-        :: ("Access-Control-Allow-Headers", "X-Requested-With")
-        :: thumbprint_header
-        )
-      fd
-      (Int64.of_int @@ String.length response_str)
-      (fun fd -> Unixext.really_write_string fd response_str |> ignore)
+    let headers =
+      (Http.Hdr.content_type, "text/xml")
+      :: ("access-control-allow-origin", "*")
+      :: ("access-control-allow-headers", "X-Requested-With")
+      :: thumbprint_header
+    in
+    Http_svr.response2 reqd headers response_str
   with
   | Api_errors.Server_error (err, params) ->
-      Http_svr.response_str req
-        ~hdrs:[(Http.Hdr.content_type, "text/xml")]
-        fd
+      let headers = [(Http.Hdr.content_type, "text/xml")] in
+      Http_svr.response2 reqd headers
         (Xmlrpc.string_of_response
            (Rpc.failure
               (Rpc.Enum (List.map (fun s -> Rpc.String s) (err :: params)))
@@ -152,40 +147,36 @@ let callback is_json req fd _ =
       Backtrace.is_important e ; raise e
 
 (** HTML callback that dispatches an RPC and returns the response. *)
-let jsoncallback req fd _ =
+let jsoncallback req fd reqd =
   let@ req = Helper.with_tracing ~name:__FUNCTION__ req in
-  (* fd only used for writing *)
-  let body =
-    Http_svr.read_body ~limit:Xapi_database.Db_globs.http_limit_max_rpc_size req
-      fd
-  in
   try
+    (* TODO: add back ~limit:Constants.http_limit_max_rpc_size *)
+    Http_svr.read_body2 reqd @@ fun body ->
     let json_rpc_version, id, rpc =
       Jsonrpc.version_id_and_call_of_string body
     in
-    let rpc_response = callback1 ~json_rpc_version true req fd rpc in
-    let response =
-      Jsonrpc.string_of_response ~id ~version:json_rpc_version rpc_response
+    let response = callback1 ~json_rpc_version true req fd rpc in
+    let response_str =
+      Jsonrpc.string_of_response ~id ~version:json_rpc_version response
     in
-    let thumbprint_header = create_thumbprint_header req rpc_response in
-    Http_svr.response_fct req
-      ~hdrs:
-        ((Http.Hdr.content_type, "application/json")
-        :: ("Access-Control-Allow-Origin", "*")
-        :: ("Access-Control-Allow-Headers", "X-Requested-With")
-        :: thumbprint_header
+    let thumbprint_header = create_thumbprint_header req response in
+    let headers =
+      (Http.Hdr.content_type, "application/json")
+      :: ("access-control-allow-origin", "*")
+      :: ("access-control-allow-headers", "X-Requested-With")
+      :: thumbprint_header
+    in
+    Http_svr.response2 reqd headers response_str
+  with
+  | Api_errors.Server_error (err, params) ->
+      let headers = [(Http.Hdr.content_type, "application/json")] in
+      Http_svr.response2 reqd headers
+        (Jsonrpc.string_of_response ~version:Jsonrpc.V2
+           (Rpc.failure
+              (Rpc.Enum (List.map (fun s -> Rpc.String s) (err :: params)))
+           )
         )
-      fd
-      (Int64.of_int @@ String.length response)
-      (fun fd -> Unixext.really_write_string fd response |> ignore)
-  with Api_errors.Server_error (err, params) ->
-    Http_svr.response_str req
-      ~hdrs:[(Http.Hdr.content_type, "application/json")]
-      fd
-      (Jsonrpc.string_of_response ~version:Jsonrpc.V2
-         (Rpc.failure
-            (Rpc.Enum (List.map (fun s -> Rpc.String s) (err :: params)))
-         )
-      )
+  | e ->
+      Backtrace.is_important e ; raise e
 
 let options_callback req fd _ = Http_svr.respond_to_options req fd

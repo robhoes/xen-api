@@ -81,10 +81,10 @@ end = struct
           ipv6_enabled := Unix.domain_of_sockaddr sockaddr = Unix.PF_INET6 ;
           Xapi_http.bind sockaddr
     in
-    Http_svr.start
-      ~header_read_timeout:!Xapi_globs.header_read_timeout_tcp
-      ~header_total_timeout:!Xapi_globs.header_total_timeout_tcp
-      ~max_header_length:!Xapi_globs.max_header_length_tcp
+    Http_svr.start2
+    (* ~header_read_timeout:!Xapi_globs.header_read_timeout_tcp
+       ~header_total_timeout:!Xapi_globs.header_total_timeout_tcp
+       ~max_header_length:!Xapi_globs.max_header_length_tcp*)
       ~conn_limit:!Xapi_globs.conn_limit_tcp Xapi_http.server socket ;
     management_servers := socket :: !management_servers ;
     (* NB if we synchronously bring up the management interface on a master
