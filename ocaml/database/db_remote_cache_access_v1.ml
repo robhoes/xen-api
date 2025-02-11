@@ -130,16 +130,12 @@ module DBCacheRemoteListener = struct
         raise e
 end
 
-let handler req fd _ =
+let handler _req _fd reqd =
   (* fd only used for writing *)
-  let body =
-    Http_svr.read_body ~limit:Db_globs.http_limit_max_rpc_size req fd
-  in
+  (* TODO: add back ~limit:Constants.http_limit_max_rpc_size *)
+  Http_svr.read_body2 reqd @@ fun body ->
   let body_xml = Xml.parse_string body in
   let reply_xml = DBCacheRemoteListener.process_xmlrpc body_xml in
   let response = Xml.to_string reply_xml in
-  Http_svr.response_fct req fd
-    (Int64.of_int @@ String.length response)
-    (fun fd ->
-      Unix.write_substring fd response 0 (String.length response) |> ignore
-    )
+  let headers = (Http.Hdr.content_type, "text/xml") :: [] in
+  Http_svr.response2 reqd headers response
