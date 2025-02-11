@@ -33,16 +33,17 @@ let list_sm_drivers ~__context =
   in
   Storage_interface.rpc_of driver_list all
 
-let respond req rpc s =
+let respond req rpc _s reqd =
   let txt = Jsonrpc.to_string rpc in
-  Http_svr.headers s (Http.http_200_ok ~version:"1.0" ~keep_alive:false ()) ;
-  req.Http.Request.close <- true ;
-  Unixext.really_write s txt 0 (String.length txt)
+  (*  Http_svr.headers s (Http.http_200_ok ~version:"1.0" ~keep_alive:false ()) ;*)
+  Http_svr.response2 reqd [] txt ;
+  req.Http.Request.close <- true
+(*  Unixext.really_write s txt 0 (String.length txt) *)
 
-let list_drivers req s =
+let list_drivers req s reqd =
   respond req
     (System_domains.rpc_of_services (System_domains.list_services ()))
-    s
+    s reqd
 
 let fix_cookie = function
   | [] ->
@@ -151,12 +152,12 @@ let http_proxy_to_plugin req from name =
   ) else
     http_proxy_to req from (Unix.ADDR_UNIX path)
 
-let post_handler (req : Http.Request.t) s _ =
+let post_handler (req : Http.Request.t) s reqd =
   Xapi_http.with_context ~dummy:true "Querying services" req s (fun __context ->
       match String.split_on_char '/' req.Http.Request.path with
       | "" :: services :: "xenops" :: _ when services = _services ->
           (* over the network we still use XMLRPC *)
-          let request = Http_svr.read_body req s in
+          Http_svr.read_body2 reqd @@ fun request ->
           let response =
             if !Xcp_client.use_switch then
               let req = Xmlrpc.call_of_string request in
@@ -173,7 +174,8 @@ let post_handler (req : Http.Request.t) s _ =
                 ~srcstr:"remote" ~dststr:"xenops" Xenops_interface.default_uri
                 request
           in
-          Http_svr.response_str req ~hdrs:[] s response
+          let headers = [] in
+          Http_svr.response2 reqd headers response
       | "" :: services :: "plugin" :: name :: _ when services = _services ->
           http_proxy_to_plugin req s name
       | [""; services; "SM"] when services = _services ->
@@ -215,7 +217,7 @@ let put_handler (req : Http.Request.t) s _ =
           req.Http.Request.close <- true
   )
 
-let get_handler (req : Http.Request.t) s _ =
+let get_handler (req : Http.Request.t) s reqd =
   Xapi_http.with_context ~dummy:true "Querying services" req s (fun __context ->
       debug "uri = %s" req.Http.Request.path ;
       match String.split_on_char '/' req.Http.Request.path with
@@ -227,21 +229,21 @@ let get_handler (req : Http.Request.t) s _ =
       | "" :: services :: "plugin" :: name :: _ when services = _services ->
           http_proxy_to_plugin req s name
       | [""; services; "driver"] when services = _services ->
-          list_drivers req s
+          list_drivers req s reqd
       | [""; services; "SM"; driver] when services = _services -> (
         try
           respond req
             (Storage_interface.(rpc_of query_result)
                (Smint.query_result_of_sr_driver_info (Sm.info_of_driver driver))
             )
-            s
+            s reqd
         with _ ->
           Http_svr.headers s (Http.http_404_missing ~version:"1.0" ()) ;
           req.Http.Request.close <- true
       )
       | [""; services; "SM"] when services = _services ->
           let rpc = list_sm_drivers ~__context in
-          respond req rpc s
+          respond req rpc s reqd
       | [""; services] when services = _services ->
           let q =
             {
@@ -258,7 +260,7 @@ let get_handler (req : Http.Request.t) s _ =
             ; smapi_version= SMAPIv2
             }
           in
-          respond req (Storage_interface.(rpc_of query_result) q) s
+          respond req (Storage_interface.(rpc_of query_result) q) s reqd
       | _ ->
           Http_svr.headers s (Http.http_404_missing ~version:"1.0" ()) ;
           req.Http.Request.close <- true
