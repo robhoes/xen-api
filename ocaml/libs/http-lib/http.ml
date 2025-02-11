@@ -705,12 +705,8 @@ module Request = struct
 
   let to_wire_string (x : t) =
     let headers, body = to_headers_and_body x in
-    let frame_header =
-      if x.frame then
-        make_frame_header headers
-      else
-        ""
-    in
+    (*    let frame_header = if x.frame then make_frame_header headers else "" in*)
+    let frame_header = "" in
     frame_header ^ headers ^ body
 
   let with_originator_of req f =
