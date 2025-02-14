@@ -2618,7 +2618,7 @@ let stream_import __context rpc session_id s content_length refresh_session
       vmrefs
   )
 
-let handler (req : Request.t) s _ =
+let handler (req : Request.t) s reqd =
   req.Request.close <- true ;
   Xapi_http.assert_credentials_ok "VM.import" ~http_action:"put_import" req s ;
   debug "import handler" ;
@@ -2633,6 +2633,7 @@ let handler (req : Request.t) s _ =
   in
   (* Perform the SR reachability check using a fresh context/task because
      	   we don't want to complete the task in the forwarding case *)
+  Http_svr.read_body_to_pipe reqd @@ fun s' ->
   Server_helpers.exec_with_new_task ?subtask_of "VM.import" (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           let sr =
@@ -2742,7 +2743,7 @@ let handler (req : Request.t) s _ =
                         Http_svr.headers s headers ;
                         debug "Reading XML" ;
                         ignore
-                          (stream_import __context rpc session_id s
+                          (stream_import __context rpc session_id s'
                              content_length refresh_session config
                           )
                 )
