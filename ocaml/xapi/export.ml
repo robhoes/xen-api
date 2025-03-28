@@ -905,7 +905,7 @@ let metadata_handler (req : Request.t) s reqd =
           raise e
   )
 
-let handler (req : Request.t) s _ =
+let handler (req : Request.t) s reqd =
   debug "export handler" ;
   req.Request.close <- true ;
   (* First things first, let's make sure that the request has a valid session or username/password *)
@@ -983,7 +983,8 @@ let handler (req : Request.t) s _ =
         | e ->
             error "Caught exception in export handler: %s" (Printexc.to_string e) ;
             raise e
-      ) else (
+      ) else
+        Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
         (* Xapi_http.with_context always completes the task at the end *)
         debug "Doing xapi_http.with_context now..." ;
         Xapi_http.with_context "VM.export" req s (fun __context ->
@@ -1000,7 +1001,7 @@ let handler (req : Request.t) s _ =
                   List.mem_assoc "preserve_power_state" all
                   && bool_of_string (List.assoc "preserve_power_state" all)
                 in
-                let headers =
+                (*                let headers =
                   Http.http_200_ok ~keep_alive:false ~version:"1.0" ()
                   @ [
                       Http.Hdr.task_id ^ ": " ^ task_id
@@ -1008,23 +1009,34 @@ let handler (req : Request.t) s _ =
                     ; content_type
                     ; "Content-Disposition: attachment; filename=\"export.xva\""
                     ]
+                in*)
+                let headers =
+                  [
+                    (Http.Hdr.task_id, task_id)
+                  ; ("Server", Xapi_version.xapi_user_agent)
+                  ; (Http.Hdr.content_type, "application/octet-stream")
+                  ; ( "Content-Disposition"
+                    , "attachment; filename=\"export.xva\""
+                    )
+                  ; ("connection", "close")
+                  ]
                 in
+                send_headers headers ;
                 with_vm_locked ~__context ~vm:vm_ref ~task_id `export (fun () ->
-                    Http_svr.headers s headers ;
+                    (*Http_svr.headers s headers ;*)
                     let go fd =
                       export refresh_session __context rpc session_id fd vm_ref
                         preserve_power_state
                     in
                     match compression_algorithm with
                     | Some Gzip ->
-                        Gzip.Default.compress s go
+                        Gzip.Default.compress s' go
                     | Some Zstd ->
-                        Zstd.Default.compress s go
+                        Zstd.Default.compress s' go
                     | None ->
-                        go s
+                        go s'
                 )
                 (* Exceptions are handled by Xapi_http.with_context *)
             )
         )
-      )
   )

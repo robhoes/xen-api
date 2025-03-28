@@ -136,6 +136,8 @@ let response_str req ?hdrs s body =
       Unixext.really_write_string s body
   )
 
+type send_headers = (string * string) list -> unit
+
 let response_missing ?(hdrs = []) s body =
   let connection = (Http.Hdr.connection, "close") in
   let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
@@ -1023,6 +1025,62 @@ let response2 reqd headers s =
       response2_h1 r headers s
   | H2_reqd r ->
       response2_h2 r headers s
+  | No_reqd ->
+      ()
+
+let bufsize = 4096
+
+let respond_with_pipe_h1 reqd callback =
+  let open Httpun in
+  let fd_out, fd_in = Unix.pipe () in
+  let headers_ch = Event.new_channel () in
+  let send_headers headers = Event.send headers_ch headers |> Event.sync in
+  let t =
+    Thread.create
+      (fun () ->
+        debug "respond_with_pipe_h1: calling back with pipe" ;
+        callback fd_in send_headers ;
+        debug "respond_with_pipe_h1: callback finished" ;
+        Unix.close fd_in
+      )
+      ()
+  in
+  let headers' = Event.receive headers_ch |> Event.sync in
+  let headers = Headers.of_list headers' in
+  let response = Httpun.Response.create ~headers `OK in
+  let writer =
+    Httpun.Reqd.respond_with_streaming ~flush_headers_immediately:true reqd
+      response
+  in
+  let b = Bigstringaf.create bufsize in
+  let rec loop () =
+    debug "respond_with_pipe_h1: read from pipe" ;
+    let n = Unix.read_bigarray fd_out b 0 bufsize in
+    if n > 0 then (
+      debug "respond_with_pipe_h1: write %d bytes to stream" n ;
+      Body.Writer.write_bigstring writer ~len:n b ;
+      loop ()
+    ) else (
+      debug "respond_with_pipe_h1: finished" ;
+      Thread.join t ;
+      Body.Writer.flush writer (function
+        | `Written ->
+            debug "respond_with_pipe_h1: flush written"
+        | `Closed ->
+            debug "respond_with_pipe_h1: flush closed"
+        ) ;
+      Body.Writer.close writer ;
+      Unix.close fd_out
+    )
+  in
+  loop ()
+
+let respond_with_pipe reqd callback =
+  match reqd with
+  | H1_reqd r ->
+      respond_with_pipe_h1 r callback
+  | H2_reqd _r ->
+      ()
   | No_reqd ->
       ()
 
