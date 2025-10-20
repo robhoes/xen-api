@@ -9,12 +9,7 @@ module IO_loop = struct
       let lenv =
         List.fold_left
           (fun acc {Faraday.buffer; off; len} ->
-            let _ : int =
-              let b = Bigarray.Array1.sub buffer off len in
-              debug "writev: %s" (Bigstringaf.to_string b) ;
-              (* Bigstring_unix.write socket ~len b *)
-              Unix.write_bigarray socket buffer off len
-            in
+            let _ : int = Unix.write_bigarray socket buffer off len in
             acc + len
           )
           0 iovecs
@@ -25,12 +20,7 @@ module IO_loop = struct
   let read_once socket buffer =
     Buffer.put
       ~f:(fun buf ~off ~len k ->
-        let n =
-          (* OCaml 5.2 has Unix.read_bigarray, but use Bigstring_unix for now *)
-          (* Bigarray.Array1.sub buf off len |> Bigstring_unix.read socket ~len *)
-          Unix.read_bigarray socket buf off len
-        in
-        debug "read %d" n ;
+        let n = Unix.read_bigarray socket buf off len in
         match n with 0 -> raise End_of_file | _ -> k n
       )
       buffer
@@ -62,16 +52,12 @@ module IO_loop = struct
       -> Unix.file_descr
       -> unit =
    fun (module Runtime) ~read_buffer_size t socket ->
-    debug "IO_loop.start" ;
     let write_closed = ref false in
     let read_buffer = Buffer.create read_buffer_size in
     let rec read_loop () =
-      debug "read_loop" ;
       let rec read_loop_step () =
-        debug "read_loop_step" ;
         match Runtime.next_read_operation t with
         | `Read ->
-            debug "read_loop_step: read" ;
             ( match read socket read_buffer with
             | _n ->
                 let (_ : int) =
@@ -90,10 +76,8 @@ module IO_loop = struct
             ) ;
             read_loop_step ()
         | `Yield ->
-            debug "read_loop_step: yield" ;
             Runtime.yield_reader t read_loop
         | `Close -> (
-            debug "read_loop_step: close" ;
             match read socket read_buffer with
             | _n ->
                 (* discard *)
@@ -121,20 +105,15 @@ module IO_loop = struct
           Runtime.report_exn t exn
     in
     let rec write_loop () =
-      debug "write_loop" ;
       let rec write_loop_step () =
-        debug "write_loop_step" ;
         match Runtime.next_write_operation t with
         | `Write io_vectors ->
-            debug "write_loop_step: write" ;
             let write_result = writev socket io_vectors in
             Runtime.report_write_result t write_result ;
             write_loop_step ()
         | `Yield ->
-            debug "write_loop_step: yield" ;
             Runtime.yield_writer t write_loop
         | `Close _ ->
-            debug "write_loop_step: close" ;
             write_closed := true ;
             shutdown socket Unix.SHUTDOWN_SEND
       in
