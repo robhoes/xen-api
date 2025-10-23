@@ -133,6 +133,8 @@ val read_body : ?limit:int -> Http.Request.t -> Unix.file_descr -> string
 
 val read_body2 : reqd -> (string -> unit) -> unit
 
+val read_body_to_pipe : reqd -> (Unix.file_descr -> unit) -> unit
+
 val response2 : reqd -> (string * string) list -> string -> unit
 
 (* Helpers to determine the client of a call *)

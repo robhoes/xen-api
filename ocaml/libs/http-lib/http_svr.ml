@@ -74,7 +74,10 @@ type handler = Http.Request.t -> Unix.file_descr -> reqd -> unit
 (* try and do f (unit -> unit), ignore exceptions *)
 let best_effort f = try f () with _ -> ()
 
-let headers s headers = output_http s headers ; output_http s [""]
+let headers s headers =
+  List.iter (fun h -> debug "Response header: %s" h) headers ;
+  output_http s headers ;
+  output_http s [""]
 
 (* let response s hdrs length f =
    output_http s hdrs;
@@ -952,6 +955,40 @@ let read_body2 reqd callback =
       read_body2_h1 r callback
   | H2_reqd r ->
       read_body2_h2 r callback
+  | No_reqd ->
+      ()
+
+let read_body_to_pipe_h1 reqd callback =
+  let open Httpun in
+  let request_body = Reqd.request_body reqd in
+  let fd_out, fd_in = Unix.pipe () in
+  let t =
+    Thread.create
+      (fun () ->
+        debug "calling back with pipe" ;
+        callback fd_out ;
+        debug "callback finished" ;
+        Unix.close fd_out
+      )
+      ()
+  in
+  let rec on_read buffer ~off ~len =
+    debug "on_read" ;
+    let fragment = Bytes.create len in
+    Bigstringaf.blit_to_bytes buffer ~src_off:off fragment ~dst_off:0 ~len ;
+    debug "on_read: %s" (Bytes.to_string fragment) ;
+    let _ : int = Unix.write_bigarray fd_in buffer off len in
+    Body.Reader.schedule_read request_body ~on_eof ~on_read
+  and on_eof () = debug "EOF" ; Unix.close fd_in ; Thread.join t in
+  debug "scheduling body read" ;
+  Body.Reader.schedule_read request_body ~on_eof ~on_read
+
+let read_body_to_pipe reqd callback =
+  match reqd with
+  | H1_reqd r ->
+      read_body_to_pipe_h1 r callback
+  | H2_reqd _r ->
+      ()
   | No_reqd ->
       ()
 

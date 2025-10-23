@@ -579,9 +579,13 @@ let call_api_functions_internal ~__context f =
   in
   (* let () = debug "login done" in *)
   finally
-    (fun () -> f rpc session_id)
     (fun () ->
-      (* debug "remote client call finished; logging out"; *)
+      let r = f rpc session_id in
+      debug "finished f without error" ;
+      r
+    )
+    (fun () ->
+      debug "remote client call finished; logging out" ;
       if !require_explicit_logout then
         try Client.Client.Session.logout ~rpc ~session_id
         with e ->

@@ -2439,9 +2439,10 @@ let with_error_handling f =
     )
 
 (** Import metadata only *)
-let metadata_handler (req : Request.t) s _ =
+let metadata_handler (req : Request.t) s reqd =
   debug "metadata_handler called" ;
   req.Request.close <- true ;
+  Http_svr.read_body_to_pipe reqd @@ fun s' ->
   Xapi_http.with_context "VM.metadata_import" req s (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           let full_restore = find_query_flag req.Request.query "restore" in
@@ -2469,7 +2470,7 @@ let metadata_handler (req : Request.t) s _ =
               ]
           in
           Http_svr.headers s headers ;
-          with_open_archive s ?length:req.Request.content_length
+          with_open_archive s' ?length:req.Request.content_length
             (fun metadata s ->
               debug "Got XML" ;
               (* Skip trailing two zero blocks *)
