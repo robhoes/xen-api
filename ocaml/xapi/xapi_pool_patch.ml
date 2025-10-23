@@ -85,7 +85,7 @@ let pool_patch_upload_handler (req : Http.Request.t) s _ =
               let vdi_opt =
                 Import_raw_vdi.localhost_handler rpc session_id
                   (Importexport.vdi_of_req ~__context req)
-                  req s
+                  req s s
               in
               match vdi_opt with
               | Some vdi -> (

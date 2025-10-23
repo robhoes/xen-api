@@ -36,7 +36,7 @@ exception HandleError of exn * string list
 (* Exception to put into the task * headers to return to the client *)
 
 let localhost_handler rpc session_id vdi_opt (req : Request.t)
-    (s : Unix.file_descr) =
+    (s : Unix.file_descr) (s' : Unix.file_descr) =
   req.Request.close <- true ;
   Xapi_http.with_context "Importing raw VDI" req s (fun __context ->
       let all = req.Request.query @ req.Request.cookie in
@@ -183,7 +183,7 @@ let localhost_handler rpc session_id vdi_opt (req : Request.t)
                       session_id vdi `RW (fun path ->
                         Qcow_tool_wrapper.receive
                           (Qcow_tool_wrapper.update_task_progress __context)
-                          s path
+                          s' path
                     )
                 | Raw | Vhd ->
                     let prezeroed =
@@ -195,12 +195,12 @@ let localhost_handler rpc session_id vdi_opt (req : Request.t)
                         if chunked then
                           Vhd_tool_wrapper.receive
                             (Vhd_tool_wrapper.update_task_progress __context)
-                            "raw" "chunked" s None path "" prezeroed
+                            "raw" "chunked" s' None path "" prezeroed
                         else
                           Vhd_tool_wrapper.receive
                             (Vhd_tool_wrapper.update_task_progress __context)
                             (Importexport.Format.to_string format)
-                            "none" s req.Request.content_length path ""
+                            "none" s' req.Request.content_length path ""
                             prezeroed
                     )
                 | Tar ->
@@ -212,7 +212,7 @@ let localhost_handler rpc session_id vdi_opt (req : Request.t)
                       Client.VDI.get_virtual_size ~rpc ~session_id ~self:vdi
                     in
                     (* VDIs exported as TAR archives will always have inline checksums *)
-                    Stream_vdi.recv_all_vdi refresh_session s __context rpc
+                    Stream_vdi.recv_all_vdi refresh_session s' __context rpc
                       session_id ~has_inline_checksums:true ~force:false
                       [(Xapi_globs.vdi_tar_export_dir, vdi, size)]
                     |> ignore
@@ -232,7 +232,8 @@ let localhost_handler rpc session_id vdi_opt (req : Request.t)
           raise e
   )
 
-let import vdi (req : Request.t) (s : Unix.file_descr) _ =
+let import vdi (req : Request.t) (s : Unix.file_descr) (s' : Unix.file_descr)
+    _reqd =
   Xapi_http.assert_credentials_ok "VDI.import" ~http_action:"put_import_raw_vdi"
     req s ;
   (* Perform the SR reachability check using a fresh context/task because
@@ -254,7 +255,7 @@ let import vdi (req : Request.t) (s : Unix.file_descr) _ =
                 debug "Checking whether localhost can see SR: %s"
                   (Ref.string_of sr) ;
                 if Importexport.check_sr_availability ~__context sr then
-                  localhost_handler rpc session_id vdi req s
+                  localhost_handler rpc session_id vdi req s s'
                 else
                   let host = Importexport.find_host_for_sr ~__context sr in
                   let address = Db.Host.get_address ~__context ~self:host in
@@ -273,11 +274,12 @@ let import vdi (req : Request.t) (s : Unix.file_descr) _ =
         raise e
   )
 
-let handler (req : Request.t) (s : Unix.file_descr) _ =
+let handler (req : Request.t) (s : Unix.file_descr) reqd =
   Xapi_http.assert_credentials_ok "VDI.import" ~http_action:"put_import_raw_vdi"
     req s ;
   (* Using a fresh context/task because we don't want to complete the
      	   task in the forwarding case *)
+  Http_svr.read_body_to_pipe reqd @@ fun s' ->
   Server_helpers.exec_with_new_task "VDI.import" (fun __context ->
-      ignore (import (vdi_of_req ~__context req) req s ())
+      ignore (import (vdi_of_req ~__context req) req s s' ())
   )

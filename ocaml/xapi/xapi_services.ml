@@ -202,7 +202,7 @@ let put_handler (req : Http.Request.t) s _ =
               (Storage_interface.Sr.of_string sr)
               (Storage_interface.Vdi.of_string vdi)
           in
-          ignore (Import_raw_vdi.import (Some vdi) req s ())
+          ignore (Import_raw_vdi.import (Some vdi) req s s ())
       | [""; services; "SM"; "nbd"; sr; vdi; dp] when services = _services ->
           Storage_migrate.nbd_handler req s sr vdi dp
       | [""; services; "SM"; "nbd"; vm; sr; vdi; dp] when services = _services
