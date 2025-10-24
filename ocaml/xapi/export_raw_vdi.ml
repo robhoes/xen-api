@@ -20,7 +20,7 @@ module D = Debug.Make (struct let name = "export_raw_vdi" end)
 open D
 
 let localhost_handler rpc session_id vdi (req : Http.Request.t)
-    (s : Unix.file_descr) =
+    (s : Unix.file_descr) s' send_headers =
   req.Http.Request.close <- true ;
   Xapi_http.with_context "Exporting raw VDI" req s (fun __context ->
       let task_id = Context.get_task_id __context in
@@ -51,13 +51,13 @@ let localhost_handler rpc session_id vdi (req : Http.Request.t)
               | Qcow ->
                   Qcow_tool_wrapper.send ?relative_to:base_path
                     (Qcow_tool_wrapper.update_task_progress __context)
-                    s path size
+                    s' path size
               | Vhd | Tar | Raw ->
                   Vhd_tool_wrapper.send ?relative_to:base_path
                     (Vhd_tool_wrapper.update_task_progress __context)
                     "none"
                     (Importexport.Format.to_string format)
-                    s path size "" ;
+                    s' path size "" ;
                   debug "Copying VDI complete."
             with Unix.Unix_error (Unix.EIO, _, _) ->
               raise
@@ -66,6 +66,7 @@ let localhost_handler rpc session_id vdi (req : Http.Request.t)
                 )
           in
           try
+            (*
             let headers =
               Http.http_200_ok ~keep_alive:false ()
               @ [
@@ -78,6 +79,16 @@ let localhost_handler rpc session_id vdi (req : Http.Request.t)
                 ]
             in
             Http_svr.headers s headers ;
+            *)
+            let headers =
+              [
+                Http.Hdr.task_id, Ref.string_of task_id
+              ; Http.Hdr.content_type, content_type
+              ; Http.Hdr.content_disposition, "attachment; filename=\"" ^ filename ^ "\""
+              ; Http.Hdr.connection, "close"
+              ]
+            in
+            send_headers headers ;
             match format with
             | Raw | Vhd | Qcow ->
                 let size = Db.VDI.get_virtual_size ~__context ~self:vdi in
@@ -111,9 +122,9 @@ let localhost_handler rpc session_id vdi (req : Http.Request.t)
                 let size =
                   Client.Client.VDI.get_virtual_size ~rpc ~session_id ~self:vdi
                 in
-                Stream_vdi.send_all refresh_session s ~__context rpc session_id
+                Stream_vdi.send_all refresh_session s' ~__context rpc session_id
                   [(Xapi_globs.vdi_tar_export_dir, vdi, size)] ;
-                Tar_helpers.write_end s
+                Tar_helpers.write_end s'
           with e ->
             Backtrace.is_important e ;
             TaskHelper.failed ~__context e ;
@@ -121,14 +132,14 @@ let localhost_handler rpc session_id vdi (req : Http.Request.t)
         )
   )
 
-let export_raw vdi (req : Http.Request.t) (s : Unix.file_descr) _ =
+let export_raw vdi (req : Http.Request.t) (s : Unix.file_descr) s' send_headers _ =
   (* Check the SR is reachable (in a fresh task context) *)
   Server_helpers.exec_with_new_task "VDI.export_raw_vdi" (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           let sr = Db.VDI.get_SR ~__context ~self:vdi in
           debug "Checking whether localhost can see SR: %s" (Ref.string_of sr) ;
           if Importexport.check_sr_availability ~__context sr then
-            localhost_handler rpc session_id vdi req s
+            localhost_handler rpc session_id vdi req s s' send_headers
           else
             let host = Importexport.find_host_for_sr ~__context sr in
             let address = Db.Host.get_address ~__context ~self:host in
@@ -136,14 +147,15 @@ let export_raw vdi (req : Http.Request.t) (s : Unix.file_descr) _ =
       )
   )
 
-let handler (req : Http.Request.t) (s : Unix.file_descr) _ =
+let handler (req : Http.Request.t) (s : Unix.file_descr) reqd =
   debug "export_raw_vdi handler" ;
   Xapi_http.assert_credentials_ok "VDI.export_raw"
     ~http_action:"get_export_raw_vdi" req s ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Server_helpers.exec_with_new_task "VDI.export_raw_vdi" (fun __context ->
       match Importexport.vdi_of_req ~__context req with
       | Some vdi ->
-          export_raw vdi req s ()
+          export_raw vdi req s s' send_headers ()
       | None ->
           failwith "Missing vdi query parameter"
   )
