@@ -279,7 +279,7 @@ let handler (req : Request.t) (s : Unix.file_descr) reqd =
     req s ;
   (* Using a fresh context/task because we don't want to complete the
      	   task in the forwarding case *)
-  Http_svr.read_body_to_pipe reqd @@ fun s' ->
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Server_helpers.exec_with_new_task "VDI.import" (fun __context ->
       ignore (import (vdi_of_req ~__context req) req s s' ())
   )

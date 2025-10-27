@@ -2442,7 +2442,7 @@ let with_error_handling f =
 let metadata_handler (req : Request.t) s reqd =
   debug "metadata_handler called" ;
   req.Request.close <- true ;
-  Http_svr.read_body_to_pipe reqd @@ fun s' ->
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "VM.metadata_import" req s (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           let full_restore = find_query_flag req.Request.query "restore" in
@@ -2633,7 +2633,7 @@ let handler (req : Request.t) s reqd =
   in
   (* Perform the SR reachability check using a fresh context/task because
      	   we don't want to complete the task in the forwarding case *)
-  Http_svr.read_body_to_pipe reqd @@ fun s' ->
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Server_helpers.exec_with_new_task ?subtask_of "VM.import" (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           let sr =
