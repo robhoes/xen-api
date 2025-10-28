@@ -133,11 +133,11 @@ let callback is_json req fd reqd =
       :: ("access-control-allow-headers", "X-Requested-With")
       :: thumbprint_header
     in
-    Http_svr.response2 reqd headers response_str
+    Http_svr.response2 reqd `OK headers response_str
   with
   | Api_errors.Server_error (err, params) ->
       let headers = [(Http.Hdr.content_type, "text/xml")] in
-      Http_svr.response2 reqd headers
+      Http_svr.response2 reqd `OK headers
         (Xmlrpc.string_of_response
            (Rpc.failure
               (Rpc.Enum (List.map (fun s -> Rpc.String s) (err :: params)))
@@ -166,11 +166,11 @@ let jsoncallback req fd reqd =
       :: ("access-control-allow-headers", "X-Requested-With")
       :: thumbprint_header
     in
-    Http_svr.response2 reqd headers response_str
+    Http_svr.response2 reqd `OK headers response_str
   with
   | Api_errors.Server_error (err, params) ->
       let headers = [(Http.Hdr.content_type, "application/json")] in
-      Http_svr.response2 reqd headers
+      Http_svr.response2 reqd `OK headers
         (Jsonrpc.string_of_response ~version:Jsonrpc.V2
            (Rpc.failure
               (Rpc.Enum (List.map (fun s -> Rpc.String s) (err :: params)))

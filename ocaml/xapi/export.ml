@@ -896,7 +896,7 @@ let metadata_handler (req : Request.t) s reqd =
             ; (Http.Hdr.cache_control, "no-cache, no-store")
             ]
           in
-          Http_svr.response2 reqd headers tar_data
+          Http_svr.response2 reqd `OK headers tar_data
       | Some e ->
           let response_string = Http.Response.(to_wire_string internal_error) in
           Unixext.really_write_string s response_string ;

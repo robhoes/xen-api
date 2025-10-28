@@ -138,4 +138,4 @@ let handler _req _fd reqd =
   let reply_xml = DBCacheRemoteListener.process_xmlrpc body_xml in
   let response = Xml.to_string reply_xml in
   let headers = (Http.Hdr.content_type, "text/xml") :: [] in
-  Http_svr.response2 reqd headers response
+  Http_svr.response2 reqd `OK headers response

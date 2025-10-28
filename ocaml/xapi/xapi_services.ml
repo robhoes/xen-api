@@ -36,7 +36,7 @@ let list_sm_drivers ~__context =
 let respond req rpc _s reqd =
   let txt = Jsonrpc.to_string rpc in
   (*  Http_svr.headers s (Http.http_200_ok ~version:"1.0" ~keep_alive:false ()) ;*)
-  Http_svr.response2 reqd [] txt ;
+  Http_svr.response2 reqd `OK [] txt ;
   req.Http.Request.close <- true
 (*  Unixext.really_write s txt 0 (String.length txt) *)
 
@@ -175,7 +175,7 @@ let post_handler (req : Http.Request.t) s reqd =
                 request
           in
           let headers = [] in
-          Http_svr.response2 reqd headers response
+          Http_svr.response2 reqd `OK headers response
       | "" :: services :: "plugin" :: name :: _ when services = _services ->
           http_proxy_to_plugin req s name
       | [""; services; "SM"] when services = _services ->

@@ -65,11 +65,11 @@ let config_file_sync_handler (req : Http.Request.t) s reqd =
       | [_; version] when current version ->
           debug "writing dom0 config files" ;
           let data = transmit_config_files () in
-          Http_svr.response2 reqd headers data ;
+          Http_svr.response2 reqd `OK headers data ;
           debug "finished writing dom0 config files"
       | _ ->
           let data = "Warning: legacy dom0 config files not supported" in
-          Http_svr.response2 reqd headers data ;
+          Http_svr.response2 reqd `OK headers data ;
           warn "legacy dom0 config files not supported"
   )
 

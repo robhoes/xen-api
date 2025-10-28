@@ -81,6 +81,8 @@ val stop : socket -> unit
 
 (* The rest of this interface needs to be deleted and replaced with Http.Response.* *)
 
+type status_code = [`OK | `Not_found | `Unauthorized]
+
 type send_headers = (string * string) list -> unit
 
 val response_fct :
@@ -140,7 +142,7 @@ val read_body2 : reqd -> (string -> unit) -> unit
 val read_body_to_pipe :
   reqd -> Unix.file_descr -> (Unix.file_descr -> unit) -> unit
 
-val response2 : reqd -> (string * string) list -> string -> unit
+val response2 : reqd -> status_code -> (string * string) list -> string -> unit
 
 val respond_with_pipe :
   reqd -> (Unix.file_descr -> send_headers -> unit) -> unit

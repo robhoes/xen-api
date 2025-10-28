@@ -136,20 +136,70 @@ let response_str req ?hdrs s body =
       Unixext.really_write_string s body
   )
 
+type status_code = [`OK | `Not_found | `Unauthorized]
+
 type send_headers = (string * string) list -> unit
 
-let response_missing2 ?(hdrs = []) reqd body =
+let response2_h1 reqd status headers s =
+  let open Httpun in
+  let headers =
+    headers |> Headers.of_list |> fun h ->
+    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
+    if s <> "" then
+      Headers.add_unless_exists h Http.Hdr.content_length
+        (String.length s |> string_of_int)
+    else
+      h
+  in
+  let response = Response.create ~headers status in
+  D.debug "Response %s" (Format.asprintf "%a" Response.pp_hum response) ;
+  Reqd.respond_with_string reqd response s
+
+let response2_h2 reqd status headers s =
+  let open H2 in
+  let headers =
+    headers |> Headers.of_list |> fun h ->
+    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
+    if s <> "" then
+      Headers.add_unless_exists h Http.Hdr.content_length
+        (String.length s |> string_of_int)
+    else
+      h
+  in
+  let response = Response.create ~headers status in
+  D.debug "Response %s" (Format.asprintf "%a" Response.pp_hum response) ;
+  Reqd.respond_with_string reqd response s
+
+let response2 reqd (status : status_code) headers s =
   match reqd with
-  | H1_reqd reqd ->
-      let connection = (Http.Hdr.connection, "close") in
-      let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
-      let headers = Httpun.Headers.of_list (connection :: cache :: hdrs) in
-      let response = Httpun.Response.create ~headers `Not_found in
-      D.debug "Response %s"
-        (Format.asprintf "%a" Httpun.Response.pp_hum response) ;
-      Httpun.Reqd.respond_with_string reqd response body
-  | _ ->
+  | H1_reqd r ->
+      response2_h1 r (status : status_code :> Httpun.Status.t) headers s
+  | H2_reqd r ->
+      response2_h2 r (status : status_code :> H2.Status.t) headers s
+  | No_reqd ->
       ()
+
+let response_missing2 ?(hdrs = []) reqd body =
+  let connection = (Http.Hdr.connection, "close") in
+  let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
+  let content_type = (Http.Hdr.content_type, "text/plain") in
+  let headers = connection :: cache :: content_type :: hdrs in
+  response2 reqd `Not_found headers body
+
+let response_error_html2 reqd (status : [< status_code]) message hdrs body =
+  let connection = (Http.Hdr.connection, "close") in
+  let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
+  let content_type = (Http.Hdr.content_type, "text/html") in
+  let headers = connection :: cache :: content_type :: hdrs in
+  response2 reqd status headers body
+
+let response_unauthorised2 reqd realm =
+  let body =
+    "<html><body><h1>HTTP 401 unauthorised</h1>Please check your credentials \
+     and retry.</body></html>"
+  in
+  let realm = ("WWW-Authenticate", Printf.sprintf "Basic realm=\"%s\"" realm) in
+  response_error_html2 reqd `Unauthorized "Unauthorised" [realm] body
 
 let response_missing ?(hdrs = []) s body =
   let connection = (Http.Hdr.connection, "close") in
@@ -705,23 +755,8 @@ let route x req ss rd =
   in
   Stats.update te.TE.stats te.TE.stats_m req ;
   try te.TE.handler req ss rd with
-  | Http.Unauthorised realm -> (
-    (* response_unauthorised ~req realm ss *)
-    match rd with
-    | H1_reqd reqd ->
-        let body =
-          "<html><body><h1>HTTP 401 unauthorised</h1>Please check your \
-           credentials and retry.</body></html>"
-        in
-        let headers =
-          Httpun.Headers.of_list
-            [("WWW-Authenticate", Printf.sprintf "Basic realm=\"%s\"" realm)]
-        in
-        let response = Httpun.Response.create ~headers `Unauthorized in
-        Httpun.Reqd.respond_with_string reqd response body
-    | _ ->
-        ()
-  )
+  | Http.Unauthorised realm ->
+      response_unauthorised2 rd realm
   | _ ->
       ()
 
@@ -1028,40 +1063,6 @@ let read_body_to_pipe reqd s callback =
       read_body_to_pipe_h1 r s callback
   | H2_reqd _r ->
       ()
-  | No_reqd ->
-      ()
-
-let response2_h1 reqd headers s =
-  let open Httpun in
-  let headers =
-    headers |> Headers.of_list |> fun h ->
-    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
-    if s <> "" then
-      Headers.add_unless_exists h Http.Hdr.content_length
-        (String.length s |> string_of_int)
-    else
-      h
-  in
-  let response = Response.create ~headers `OK in
-  Reqd.respond_with_string reqd response s
-
-let response2_h2 reqd headers s =
-  let open H2 in
-  let headers =
-    headers |> Headers.of_list |> fun h ->
-    Headers.add_unless_exists h Http.Hdr.content_type "text/xml" |> fun h ->
-    Headers.add_unless_exists h Http.Hdr.content_length
-      (String.length s |> string_of_int)
-  in
-  let response = Response.create ~headers `OK in
-  Reqd.respond_with_string reqd response s
-
-let response2 reqd headers s =
-  match reqd with
-  | H1_reqd r ->
-      response2_h1 r headers s
-  | H2_reqd r ->
-      response2_h2 r headers s
   | No_reqd ->
       ()
 
