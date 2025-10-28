@@ -201,14 +201,17 @@ let restore_from_xml __context dry_run (xml_filename : string) =
       (Db_ref.get_database (Context.database_of new_context))
 
 (** Called when a CLI user downloads a backup of the database *)
-let pull_database_backup_handler (req : Http.Request.t) s _ =
+let pull_database_backup_handler (req : Http.Request.t) s reqd =
   debug "received request to write out db as xml" ;
   req.Http.Request.close <- true ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Xapi_http.with_context "Dumping database as XML" req s (fun __context ->
       debug "sending headers" ;
-      Http_svr.headers s (Http.http_200_ok ~keep_alive:false ()) ;
+(*    Http_svr.headers s (Http.http_200_ok ~keep_alive:false ()) ; *)
+      let headers = [("connection", "close")] in
+      send_headers headers ;
       debug "writing database xml" ;
-      write_database s ~__context ;
+      write_database s' ~__context ;
       debug "finished writing database xml"
   )
 
