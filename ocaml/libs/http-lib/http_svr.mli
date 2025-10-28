@@ -98,6 +98,8 @@ val response_str :
   -> string
   -> unit
 
+val response_missing2 : ?hdrs:(string * string) list -> reqd -> string -> unit
+
 val response_missing :
   ?hdrs:(string * string) list -> Unix.file_descr -> string -> unit
 

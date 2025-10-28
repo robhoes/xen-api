@@ -55,10 +55,10 @@ val sync :
 val create_pool_repository :
   __context:Context.t -> self:[`Repository] API.Ref.t -> unit
 
-val get_repository_handler : Http.Request.t -> Unix.file_descr -> 'a -> unit
+val get_repository_handler : Http.Request.t -> Unix.file_descr -> Http_svr.reqd -> unit
 
 val get_enabled_repository_handler :
-  Http.Request.t -> Unix.file_descr -> 'a -> unit
+  Http.Request.t -> Unix.file_descr -> Http_svr.reqd -> unit
 
 val get_host_updates_in_json :
   __context:Context.t -> installed:bool -> Yojson.Basic.t

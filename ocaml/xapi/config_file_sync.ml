@@ -42,7 +42,7 @@ let write_config config =
 
 let rewrite_config_files config = parse_config_string config |> write_config
 
-let transmit_config_files s =
+let transmit_config_files () =
   read_config_file () |> rpc_of_config |> Jsonrpc.to_string
 
 (** URL used by slaves to fetch dom0 config files (currently just root's password) *)

@@ -55,7 +55,7 @@ let access_forbidden req s =
   !Xapi_globs.website_https_only && is_external_http req s
 
 let send_file (uri_base : string) (dir : string) (req : Request.t)
-    (s : Unix.file_descr) _ =
+    (s : Unix.file_descr) reqd =
   let uri_base_len = String.length uri_base in
   let is_external_http = is_external_http req s in
   if is_external_http && !Xapi_globs.website_https_only then
@@ -92,4 +92,4 @@ let send_file (uri_base : string) (dir : string) (req : Request.t)
             file_path
         in
         response_file s file_path
-    with _ -> Http_svr.response_missing s (missing uri)
+    with _ -> Http_svr.response_missing2 reqd (missing uri)

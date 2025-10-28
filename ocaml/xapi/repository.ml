@@ -620,15 +620,15 @@ let get_host_updates_in_json ~__context ~installed =
         (ExnHelper.string_of_exn e) ;
       raise Api_errors.(Server_error (get_host_updates_failed, [ref]))
 
-let get_repository_handler (req : Http.Request.t) s _ =
+let get_repository_handler (req : Http.Request.t) s reqd =
   let open Http in
   debug "%s URL: %s" __FUNCTION__ req.Request.path ;
   req.Request.close <- true ;
   Fileserver.send_file Constants.get_repository_uri
     !Xapi_globs.local_pool_repo_dir
-    req s ()
+    req s reqd
 
-let get_enabled_repository_handler (req : Http.Request.t) s _ =
+let get_enabled_repository_handler (req : Http.Request.t) s reqd =
   let open Http in
   debug "%s URL: %s" __FUNCTION__ req.Request.path ;
   req.Request.close <- true ;
@@ -639,7 +639,7 @@ let get_enabled_repository_handler (req : Http.Request.t) s _ =
       in
       Fileserver.send_file Constants.get_enabled_repository_uri
         (Filename.concat !Xapi_globs.local_pool_repo_dir repo_name)
-        req s ()
+        req s reqd
   )
 
 let consolidate_updates_of_hosts ~repository_name ~updates_info ~hosts =

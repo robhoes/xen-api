@@ -138,6 +138,19 @@ let response_str req ?hdrs s body =
 
 type send_headers = (string * string) list -> unit
 
+let response_missing2 ?(hdrs = []) reqd body =
+  match reqd with
+  | H1_reqd reqd ->
+      let connection = (Http.Hdr.connection, "close") in
+      let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
+      let headers = Httpun.Headers.of_list (connection :: cache :: hdrs) in
+      let response = Httpun.Response.create ~headers `Not_found in
+      D.debug "Response %s"
+        (Format.asprintf "%a" Httpun.Response.pp_hum response) ;
+      Httpun.Reqd.respond_with_string reqd response body
+  | _ ->
+      ()
+
 let response_missing ?(hdrs = []) s body =
   let connection = (Http.Hdr.connection, "close") in
   let cache = (Http.Hdr.cache_control, "no-cache, no-store") in
@@ -691,7 +704,26 @@ let route x req ss rd =
       (Radix_tree.longest_prefix req.Http.Request.path method_map)
   in
   Stats.update te.TE.stats te.TE.stats_m req ;
-  te.TE.handler req ss rd
+  try te.TE.handler req ss rd with
+  | Http.Unauthorised realm -> (
+    (* response_unauthorised ~req realm ss *)
+    match rd with
+    | H1_reqd reqd ->
+        let body =
+          "<html><body><h1>HTTP 401 unauthorised</h1>Please check your \
+           credentials and retry.</body></html>"
+        in
+        let headers =
+          Httpun.Headers.of_list
+            [("WWW-Authenticate", Printf.sprintf "Basic realm=\"%s\"" realm)]
+        in
+        let response = Httpun.Response.create ~headers `Unauthorized in
+        Httpun.Reqd.respond_with_string reqd response body
+    | _ ->
+        ()
+  )
+  | _ ->
+      ()
 
 module Http2 = struct
   open H2
