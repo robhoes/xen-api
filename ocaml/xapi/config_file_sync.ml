@@ -42,14 +42,11 @@ let write_config config =
 
 let rewrite_config_files config = parse_config_string config |> write_config
 
-let write_to_fd s msg =
-  Unix.write_substring s msg 0 (String.length msg) |> ignore
-
 let transmit_config_files s =
-  read_config_file () |> rpc_of_config |> Jsonrpc.to_string |> write_to_fd s
+  read_config_file () |> rpc_of_config |> Jsonrpc.to_string
 
 (** URL used by slaves to fetch dom0 config files (currently just root's password) *)
-let config_file_sync_handler (req : Http.Request.t) s _ =
+let config_file_sync_handler (req : Http.Request.t) s reqd =
   let current version =
     let version = try int_of_string version with _ -> -1 in
     version >= config_sync_version
@@ -62,14 +59,17 @@ let config_file_sync_handler (req : Http.Request.t) s _ =
       in
       req.Http.Request.close <- true ;
       debug "sending headers" ;
-      Http_svr.headers s (Http.http_200_ok ~keep_alive:false ()) ;
+(*    Http_svr.headers s (Http.http_200_ok ~keep_alive:false ()) ;*)
+      let headers = [Http.Hdr.connection, "close"] in
       match uri with
       | [_; version] when current version ->
           debug "writing dom0 config files" ;
-          transmit_config_files s ;
+          let data = transmit_config_files () in
+          Http_svr.response2 reqd headers data ;
           debug "finished writing dom0 config files"
       | _ ->
-          write_to_fd s "Warning: legacy dom0 config files not supported" ;
+          let data = "Warning: legacy dom0 config files not supported" in
+          Http_svr.response2 reqd headers data ;
           warn "legacy dom0 config files not supported"
   )
 
