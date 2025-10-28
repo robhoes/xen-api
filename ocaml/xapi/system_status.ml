@@ -89,22 +89,22 @@ let get_capabilities () = Helpers.get_process_output Bugtool.cmd_capabilities
 
 (* This fn outputs xen-bugtool straight to the socket, only
    for tar output. It should work on embedded edition *)
-let send_via_fd __context s entries output =
+let send_via_fd __context s send_headers entries output =
   let uuid = Uuidx.to_string (Uuidx.make ()) in
   let extension = Output.to_extension output in
   let content_type = Output.to_mime output in
   let filename = Bugtool.filename __context extension in
   let params = Bugtool.params_fd ~entries ~extension ~uuid in
   let headers =
-    Http.http_200_ok ~keep_alive:false ~version:"1.0" ()
-    @ [
-        Printf.sprintf "Server: %s" Xapi_version.xapi_user_agent
-      ; Printf.sprintf "%s: %s" Http.Hdr.content_type content_type
-      ; Printf.sprintf {|%s: attachment; filename="%s"|}
-          Http.Hdr.content_disposition filename
-      ]
+    [
+      ("Server", Xapi_version.xapi_user_agent)
+    ; (Http.Hdr.content_type, content_type)
+    ; ( Http.Hdr.content_disposition
+      , Printf.sprintf {|attachment; filename="%s"|} filename
+      )
+    ]
   in
-  Http_svr.headers s headers ;
+  send_headers headers ;
   let result =
     Forkhelpers.with_logfile_fd "get-system-status" (fun log_fd ->
         let pid =
@@ -120,7 +120,7 @@ let send_via_fd __context s entries output =
 (* This fn outputs xen-bugtool into a file and then write the
    file out to the socket, to deal with zipped bugtool outputs
    It will not work on embedded edition *)
-let send_via_cp __context s entries output =
+let send_via_cp __context s _send_headers entries output =
   let extension = Output.to_extension output in
   let content_type = Output.to_mime output in
   let cmd = Bugtool.cmd_cp ~entries ~extension in
@@ -140,8 +140,8 @@ let send_via_cp __context s entries output =
     Ok ()
   with e -> Error ("(Not captured)", e)
 
-let with_api_errors f ctx s entries output =
-  match f ctx s entries output with
+let with_api_errors f ctx s send_headers entries output =
+  match f ctx s send_headers entries output with
   | Ok () ->
       ()
   | Error (log, exn) ->
@@ -159,23 +159,23 @@ let send_capabilities req s =
   in
   Http_svr.response_str req ~hdrs s content
 
-let handler (req : Request.t) s _ =
+let handler (req : Request.t) s reqd =
   req.Request.close <- true ;
   let get_param s = List.assoc_opt s req.Request.query in
   let list_capabilies = Option.is_some (get_param "list") in
   let entries = Option.value ~default:"" (get_param "entries") in
   let output = Option.bind (get_param "output") Output.of_string in
-
-  let send_list () = send_capabilities req s in
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+  let send_list () = send_capabilities req s' in
   let send_file () =
     Xapi_http.with_context task_label req s @@ fun __context ->
     match
       (Helpers.on_oem ~__context, Option.value ~default:Output.Tar output)
     with
     | _, (Output.Tar as output) ->
-        with_api_errors send_via_fd __context s entries output
+        with_api_errors send_via_fd __context s' send_headers entries output
     | false, output ->
-        with_api_errors send_via_cp __context s entries output
+        with_api_errors send_via_cp __context s' send_headers entries output
     | true, _ ->
         raise Api_errors.(Server_error (system_status_must_use_tar_on_oem, []))
   in
