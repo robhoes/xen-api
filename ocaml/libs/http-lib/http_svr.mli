@@ -81,7 +81,7 @@ val stop : socket -> unit
 
 (* The rest of this interface needs to be deleted and replaced with Http.Response.* *)
 
-type status_code = [`OK | `Not_found | `Unauthorized]
+type status_code = [`OK | `Not_found | `Unauthorized | `Internal_server_error]
 
 type send_headers = (string * string) list -> unit
 
@@ -114,6 +114,9 @@ val response_custom_error :
   ?req:Http.Request.t -> Unix.file_descr -> string -> string -> string -> unit
 
 val response_badrequest : ?req:Http.Request.t -> Unix.file_descr -> unit
+
+val response_internal_error2 :
+  ?req:Http.Request.t -> ?extra:uri_path -> exn -> reqd -> unit
 
 val response_internal_error :
   ?req:Http.Request.t -> ?extra:uri_path -> exn -> Unix.file_descr -> unit

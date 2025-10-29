@@ -898,8 +898,7 @@ let metadata_handler (req : Request.t) s reqd =
           in
           Http_svr.response2 reqd `OK headers tar_data
       | Some e ->
-          let response_string = Http.Response.(to_wire_string internal_error) in
-          Unixext.really_write_string s response_string ;
+          Http_svr.response_internal_error2 e reqd ;
           error "Caught %s while exporting metadata - responding with HTTP 500"
             (Printexc.to_string e) ;
           raise e
@@ -907,6 +906,7 @@ let metadata_handler (req : Request.t) s reqd =
 
 let handler (req : Request.t) s reqd =
   debug "export handler" ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   req.Request.close <- true ;
   (* First things first, let's make sure that the request has a valid session or username/password *)
   Xapi_http.assert_credentials_ok "VM.export" ~http_action:"get_export" req s ;
@@ -983,8 +983,7 @@ let handler (req : Request.t) s reqd =
         | e ->
             error "Caught exception in export handler: %s" (Printexc.to_string e) ;
             raise e
-      ) else
-        Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+      ) else (
         (* Xapi_http.with_context always completes the task at the end *)
         debug "Doing xapi_http.with_context now..." ;
         Xapi_http.with_context "VM.export" req s (fun __context ->
@@ -1039,4 +1038,5 @@ let handler (req : Request.t) s reqd =
                 (* Exceptions are handled by Xapi_http.with_context *)
             )
         )
+      )
   )

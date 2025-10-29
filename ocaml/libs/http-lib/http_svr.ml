@@ -136,7 +136,7 @@ let response_str req ?hdrs s body =
       Unixext.really_write_string s body
   )
 
-type status_code = [`OK | `Not_found | `Unauthorized]
+type status_code = [`OK | `Not_found | `Unauthorized | `Internal_server_error]
 
 type send_headers = (string * string) list -> unit
 
@@ -200,6 +200,24 @@ let response_unauthorised2 reqd realm =
   in
   let realm = ("WWW-Authenticate", Printf.sprintf "Basic realm=\"%s\"" realm) in
   response_error_html2 reqd `Unauthorized "Unauthorised" [realm] body
+
+let response_internal_error2 ?req ?extra exc reqd =
+  Backtrace.is_important exc ;
+  E.error "Responding with 500 Internal Error due to %s" (Printexc.to_string exc) ;
+  E.log_backtrace exc ;
+  let extra =
+    Option.fold ~none:""
+      ~some:(fun x -> "<h1> Additional information </h1>" ^ x)
+      extra
+  in
+  let body =
+    "<html><body><h1>HTTP 500 internal server error</h1>An unexpected error \
+     occurred; please wait a while and try again. If the problem persists, \
+     please contact your support representative."
+    ^ extra
+    ^ "</body></html>"
+  in
+  response_error_html2 reqd `Internal_server_error "Internal Error" [] body
 
 let response_missing ?(hdrs = []) s body =
   let connection = (Http.Hdr.connection, "close") in
