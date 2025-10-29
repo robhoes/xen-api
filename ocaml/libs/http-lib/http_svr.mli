@@ -128,6 +128,7 @@ val response_file :
   -> ?download_name:string
   -> hsts_time:int
   -> Unix.file_descr
+  -> send_headers
   -> string
   -> unit
 

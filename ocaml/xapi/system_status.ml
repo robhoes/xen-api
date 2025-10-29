@@ -120,7 +120,7 @@ let send_via_fd __context s send_headers entries output =
 (* This fn outputs xen-bugtool into a file and then write the
    file out to the socket, to deal with zipped bugtool outputs
    It will not work on embedded edition *)
-let send_via_cp __context s _send_headers entries output =
+let send_via_cp __context s send_headers entries output =
   let extension = Output.to_extension output in
   let content_type = Output.to_mime output in
   let cmd = Bugtool.cmd_cp ~entries ~extension in
@@ -131,7 +131,7 @@ let send_via_cp __context s _send_headers entries output =
     finally
       (fun () ->
         Http_svr.response_file ~mime_content_type:content_type ~hsts_time
-          ~download_name:filename s filepath
+          ~download_name:filename s send_headers filepath
       )
       (fun () ->
         Helpers.log_exn_continue "deleting xen-bugtool output" Unix.unlink

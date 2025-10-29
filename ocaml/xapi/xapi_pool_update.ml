@@ -818,7 +818,7 @@ let proxy_request req s host_uuid =
           Http_svr.response_badrequest ~req s
   )
 
-let pool_update_download_handler (req : Request.t) s _ =
+let pool_update_download_handler (req : Request.t) s reqd =
   debug "pool_update.pool_update_download_handler URL %s" req.Request.path ;
   req.Request.close <- true ;
   let localhost_uuid = Helpers.get_localhost_uuid () in
@@ -837,4 +837,5 @@ let pool_update_download_handler (req : Request.t) s _ =
       !Xapi_globs.host_update_dir ;
     Http_svr.response_forbidden ~req s
   ) else
-    Fileserver.response_file s filepath
+    Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+    Fileserver.response_file s' send_headers filepath

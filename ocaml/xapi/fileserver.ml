@@ -42,10 +42,10 @@ let missing uri =
   ^ " was not found on this server.</p> <hr><address>Xapi \
      Server</address></body></html>"
 
-let response_file s file_path =
+let response_file s send_headers file_path =
   let mime_content_type = Magic_mime.lookup file_path in
   let hsts_time = !Xapi_globs.hsts_max_age in
-  Http_svr.response_file ~mime_content_type ~hsts_time s file_path
+  Http_svr.response_file ~mime_content_type ~hsts_time s send_headers file_path
 
 let is_external_http req s =
   (not (Context.is_unix_socket s)) && Http_svr.https_client_of_req req = None
@@ -91,5 +91,6 @@ let send_file (uri_base : string) (dir : string) (req : Request.t)
           else
             file_path
         in
-        response_file s file_path
+        Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+        response_file s' send_headers file_path
     with _ -> Http_svr.response_missing2 reqd (missing uri)

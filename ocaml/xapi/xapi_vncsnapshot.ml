@@ -21,8 +21,9 @@ open D
 
 let vncsnapshot = "/usr/bin/vncsnapshot"
 
-let vncsnapshot_handler (req : Request.t) s _ =
+let vncsnapshot_handler (req : Request.t) s reqd =
   debug "vncshapshot handler running" ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Xapi_http.with_context "Taking snapshot of VM console" req s (fun __context ->
       try
         let console = Console.console_of_request __context req in
@@ -49,7 +50,7 @@ let vncsnapshot_handler (req : Request.t) s _ =
             in
             let hsts_time = !Xapi_globs.hsts_max_age in
             waitpid_fail_if_bad_exit pid ;
-            Http_svr.response_file ~hsts_time s tmp ~download_name:filename
+            Http_svr.response_file ~hsts_time s' send_headers tmp ~download_name:filename
           )
           (fun () -> try Unix.unlink tmp with _ -> ())
       with e ->
