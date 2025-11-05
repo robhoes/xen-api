@@ -133,8 +133,9 @@ let log_timestamp_of_iso8601 iso8601_timestamp =
  eg. /audit_log?...&since=2009-09-10T11:31
  eg. /audit_log?...&since=2009-09-10
 *)
-let handler (req : Request.t) (s : Unix.file_descr) _ =
+let handler (req : Request.t) (s : Unix.file_descr) reqd =
   req.Request.close <- true ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Xapi_http.with_context (* makes sure to signal task-completed to cli *)
     (Printf.sprintf "audit_log_get request") req s (fun __context ->
       let all = req.Request.cookie @ req.Request.query in
@@ -147,8 +148,7 @@ let handler (req : Request.t) (s : Unix.file_descr) _ =
       let since = log_timestamp_of_iso8601 since_iso8601 in
       (*debug "since=[%s]" since;*)
       (* we need to return an http header without content-length *)
-      Http_svr.headers s
-        (http_200_ok () @ [Http.Hdr.content_type ^ ": text/plain"]) ;
+      send_headers [(Http.Hdr.content_type, "text/plain")] ;
       (* then the contents *)
-      transfer_all_audit_files s since
+      transfer_all_audit_files s' since
   )
