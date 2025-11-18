@@ -4096,8 +4096,9 @@ let get_guest_secureboot_readiness ~__context ~self:_ =
   | _, _, _, _ ->
       `not_ready
 
-let put_bundle_handler (req : Request.t) s _ =
+let put_bundle_handler (req : Request.t) s reqd =
   req.Request.close <- true ;
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "Sync bundle" req s (fun __context ->
       (* This is the signal to say we've taken responsibility from the CLI server
          for completing the task *)
@@ -4128,7 +4129,7 @@ let put_bundle_handler (req : Request.t) s _ =
             let result =
               Tar_ext.unpack_tar_file
                 ~dir:!Xapi_globs.bundle_repository_dir
-                ~ifd:s
+                ~ifd:s'
                 ~max_size_limit:!Xapi_globs.bundle_max_size_limit
             in
             match result with
