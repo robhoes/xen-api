@@ -70,13 +70,13 @@ let process_rpc (req : Rpc.t) =
         Response.Too_many_values (x, y, z)
     )
 
-let handler req fd _ =
+let handler _req _fd reqd =
   (* fd only used for writing *)
-  let body =
-    Http_svr.read_body ~limit:Db_globs.http_limit_max_rpc_size req fd
-  in
+  (* TODO: add back ~limit:Constants.http_limit_max_rpc_size *)
+  Http_svr.read_body2 reqd @@ fun body ->
   let request_rpc = Jsonrpc.of_string body in
   let reply_rpc = process_rpc request_rpc in
   (* XXX: need to cope with > 16MiB responses *)
   let response = Jsonrpc.to_string reply_rpc in
-  Http_svr.response_str req fd response
+  let headers = (Http.Hdr.content_type, "text/json") :: [] in
+  Http_svr.response2 reqd `OK headers response
