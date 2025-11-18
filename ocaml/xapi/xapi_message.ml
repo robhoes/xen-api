@@ -857,7 +857,7 @@ let register_event_hook () =
 
 (** Handler for PUTing messages to a host.
     	Query params: { cls=<obj class>, uuid=<obj uuid> } *)
-let handler (req : Http.Request.t) fd _ =
+let handler (req : Http.Request.t) fd reqd =
   let query = req.Http.Request.query in
   req.Http.Request.close <- true ;
   debug "Xapi_message.handler: receiving messages" ;
@@ -873,6 +873,7 @@ let handler (req : Http.Request.t) fd _ =
   (* Check query for required params *)
   check_query "uuid" ;
   check_query "cls" ;
+  Http_svr.read_body_to_pipe reqd fd @@ fun fd' ->
   Xapi_http.with_context ~dummy:true "Xapi_message.handler" req fd
     (fun __context ->
       try
@@ -901,7 +902,7 @@ let handler (req : Http.Request.t) fd _ =
           Http_svr.headers fd (Http.http_200_ok ()) ;
           (* Read messages in, and write to filesystem *)
           let xml_in =
-            Xmlm.make_input (`Channel (Unix.in_channel_of_descr fd))
+            Xmlm.make_input (`Channel (Unix.in_channel_of_descr fd'))
           in
           let messages = import_xml xml_in in
           List.iter
