@@ -129,7 +129,7 @@ exception Unknown_blob
 
 exception No_storage
 
-let handler (req : Http.Request.t) s _ =
+let handler (req : Http.Request.t) s reqd =
   let query = req.Http.Request.query in
   req.Http.Request.close <- true ;
   if not (List.mem_assoc "ref" query || List.mem_assoc "uuid" query) then (
@@ -158,7 +158,7 @@ let handler (req : Http.Request.t) s _ =
             debug "public=%b" public ; (self, public)
         )
       in
-      let inner_fn __context =
+      let get_path __context =
         let blob_uuid =
           try Db.Blob.get_uuid ~__context ~self with _ -> raise Unknown_blob
         in
@@ -168,61 +168,56 @@ let handler (req : Http.Request.t) s _ =
             ()
           with _ -> raise No_storage
         ) ;
-        let path = Xapi_globs.xapi_blob_location ^ "/" ^ blob_uuid in
-        match req.Http.Request.m with
-        | Http.Get -> (
-          try
-            (* The following might raise an exception, in which case, 404 *)
-            let ifd = Unix.openfile path [Unix.O_RDONLY] 0o600 in
-            let size = (Unix.LargeFile.stat path).Unix.LargeFile.st_size in
-            Http_svr.headers s
-              (Http.http_200_ok_with_content size ~version:"1.1"
-                 ~keep_alive:false ()
-              @ [
-                  Http.Hdr.content_type
-                  ^ ": "
-                  ^ Db.Blob.get_mime_type ~__context ~self
-                ]
-              ) ;
-            ignore
-              (Xapi_stdext_pervasives.Pervasiveext.finally
-                 (fun () -> Xapi_stdext_unix.Unixext.copy_file ifd s)
-                 (fun () -> Unix.close ifd)
-              )
-          with _ -> Http_svr.headers s (Http.http_404_missing ())
-        )
-        | Http.Put ->
-            let ofd =
-              Unix.openfile path
-                [Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_SYNC; Unix.O_CREAT]
-                0o600
-            in
-            let limit =
-              match req.Http.Request.content_length with
-              | Some x ->
-                  x
-              | None ->
-                  failwith "Need content length"
-            in
-            let size =
-              Xapi_stdext_pervasives.Pervasiveext.finally
-                (fun () ->
-                  Http_svr.headers s
-                    (Http.http_200_ok () @ ["Access-Control-Allow-Origin: *"]) ;
-                  Xapi_stdext_unix.Unixext.copy_file ~limit s ofd
-                )
-                (fun () -> Unix.close ofd)
-            in
-            Db.Blob.set_size ~__context ~self ~value:size ;
-            Db.Blob.set_last_updated ~__context ~self
-              ~value:(Clock.Date.of_unix_time (Unix.gettimeofday ()))
-        | _ ->
-            failwith "Unsupported method for BLOB"
+        Xapi_globs.xapi_blob_location ^ "/" ^ blob_uuid
       in
-      if public && req.Http.Request.m = Http.Get then
-        Server_helpers.exec_with_new_task "get_blob" inner_fn
-      else
-        Xapi_http.with_context ~dummy:true "Blob handler" req s inner_fn
+      let get_fn s send_headers __context =
+        let path = get_path __context in
+        try
+          let mime_content_type = Db.Blob.get_mime_type ~__context ~self in
+          Http_svr.response_file ~mime_content_type ~hsts_time:(-1) s
+            send_headers path
+        with _ -> Http_svr.headers s (Http.http_404_missing ())
+      in
+      let put_fn s s' __context =
+        let path = get_path __context in
+        let ofd =
+          Unix.openfile path
+            [Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_SYNC; Unix.O_CREAT]
+            0o600
+        in
+        let limit =
+          match req.Http.Request.content_length with
+          | Some x ->
+              x
+          | None ->
+              failwith "Need content length"
+        in
+        let size =
+          Xapi_stdext_pervasives.Pervasiveext.finally
+            (fun () ->
+              Http_svr.headers s
+                (Http.http_200_ok () @ ["Access-Control-Allow-Origin: *"]) ;
+              Xapi_stdext_unix.Unixext.copy_file ~limit s' ofd
+            )
+            (fun () -> Unix.close ofd)
+        in
+        Db.Blob.set_size ~__context ~self ~value:size ;
+        Db.Blob.set_last_updated ~__context ~self
+          ~value:(Clock.Date.of_unix_time (Unix.gettimeofday ()))
+      in
+      match (public, req.Http.Request.m) with
+      | true, Http.Get ->
+          Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+          Server_helpers.exec_with_new_task "get_blob" (get_fn s' send_headers)
+      | false, Http.Get ->
+          Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
+          Xapi_http.with_context ~dummy:true "Blob handler" req s
+            (get_fn s' send_headers)
+      | _, Http.Put ->
+          Http_svr.read_body_to_pipe reqd s @@ fun s' ->
+          Xapi_http.with_context ~dummy:true "Blob handler" req s (put_fn s s')
+      | _ ->
+          failwith "Unsupported method for BLOB"
     with
     | Unknown_blob ->
         Http_svr.response_missing s "Unknown reference\n"
