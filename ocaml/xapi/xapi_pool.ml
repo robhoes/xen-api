@@ -3817,7 +3817,7 @@ let disable_client_certificate_auth ~__context ~self =
   Db.Pool.set_client_certificate_auth_name ~__context ~self ~value:"" ;
   Xapi_mgmt_iface.run ~__context ()
 
-let get_updates_handler (req : Http.Request.t) s _ =
+let get_updates_handler (req : Http.Request.t) s reqd =
   debug "Pool.get_updates_handler: received request" ;
   req.Http.Request.close <- true ;
   let query = req.Http.Request.query in
@@ -3859,18 +3859,20 @@ let get_updates_handler (req : Http.Request.t) s _ =
                   Yojson.Basic.to_string
                     (Repository.get_pool_updates_in_json ~__context ~hosts)
                 in
-                let size = Int64.of_int (String.length json_str) in
-                Http_svr.headers s
-                  (Http.http_200_ok_with_content size ~keep_alive:false ()
-                  @ [Http.Hdr.content_type ^ ": application/json"]
-                  ) ;
-                Unixext.really_write_string s json_str |> ignore
+                let headers =
+                  [
+                    (Http.Hdr.content_type, "application/json")
+                  ; (Http.Hdr.connection, "close")
+                  ; (Http.Hdr.cache_control, "no-cache, no-store")
+                  ]
+                in
+                Http_svr.response2 reqd `OK headers json_str
               with
               | Api_errors.(Server_error (failure, _)) as e
                 when List.mem failure failures_of_404 ->
                   error "404: can't get updates for pool: %s"
                     (ExnHelper.string_of_exn e) ;
-                  Http_svr.headers s (Http.http_404_missing ())
+                  Http_svr.response_missing2 reqd ""
               | Api_errors.(Server_error (failure, _)) as e
                 when not (List.mem failure failures_of_404) ->
                   error "getting updates for pool failed: %s"
