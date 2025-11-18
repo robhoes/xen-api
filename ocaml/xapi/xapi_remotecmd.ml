@@ -18,12 +18,12 @@ module D = Debug.Make (struct let name = "remotecmd" end)
 open D
 open Forkhelpers
 
-let do_cmd s cmd args =
+let do_cmd s_in s_out cmd args =
   match
     with_logfile_fd "execute_command_get_output" (fun log_fd ->
         (* Capture stderr output for logging *)
         let pid =
-          safe_close_and_exec (Some s) (Some s) (Some log_fd) [] cmd args
+          safe_close_and_exec (Some s_in) (Some s_out) (Some log_fd) [] cmd args
         in
         snd (waitpid pid)
     )
@@ -42,9 +42,10 @@ let do_cmd s cmd args =
 let allowed_cmds = [("rsync", "/usr/bin/rsync")]
 
 (* Handle URIs of the form: vmuuid:port *)
-let handler (req : Http.Request.t) s _ =
+let handler (req : Http.Request.t) s reqd =
   let q = req.Http.Request.query in
   debug "remotecmd handler running" ;
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "Remote command" req s (fun __context ->
       let session_id = Context.get_session_id __context in
       if not (Db.Session.get_pool ~__context ~self:session_id) then
@@ -52,5 +53,5 @@ let handler (req : Http.Request.t) s _ =
       let cmd = List.assoc "cmd" q in
       let cmd = List.assoc cmd allowed_cmds in
       let args = List.map snd (List.filter (fun (x, _) -> x = "arg") q) in
-      do_cmd s cmd args
+      do_cmd s' s cmd args
   )
