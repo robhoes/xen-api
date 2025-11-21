@@ -216,8 +216,9 @@ let pull_database_backup_handler (req : Http.Request.t) s reqd =
   )
 
 (** Invoked only by the explicit database restore code *)
-let push_database_restore_handler (req : Http.Request.t) s _ =
+let push_database_restore_handler (req : Http.Request.t) s reqd =
   debug "received request to restore db from xml dump" ;
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "Reading database as XML" req s (fun __context ->
       match req.Http.Request.content_length with
       | None ->
@@ -231,7 +232,7 @@ let push_database_restore_handler (req : Http.Request.t) s _ =
           let xml_file_fd = Unix.openfile tmp_xml_file [Unix.O_WRONLY] 0o600 in
           let () =
             finally
-              (fun () -> ignore (Unixext.copy_file ~limit:l s xml_file_fd))
+              (fun () -> ignore (Unixext.copy_file ~limit:l s' xml_file_fd))
               (fun () -> Unix.close xml_file_fd)
           in
           let dry_run =
