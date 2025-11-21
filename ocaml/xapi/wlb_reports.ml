@@ -143,19 +143,22 @@ let trim_and_send method_name tag recv_sock send_sock =
     Workload_balancing.raise_malformed_response' method_name
       "Expected data is truncated." s
 
-let handle req fd _method_name tag (method_name, request_func) =
-  let client_sock = fd in
-  debug "handle: fd = %d"
-    (Xapi_stdext_unix.Unixext.int_of_file_descr client_sock) ;
+let handle req fd reqd _method_name tag (method_name, request_func) =
+  debug "handle: fd = %d" (Xapi_stdext_unix.Unixext.int_of_file_descr fd) ;
   req.Request.close <- true ;
-  Xapi_http.with_context (sprintf "WLB %s request" method_name) req client_sock
+  Http_svr.respond_with_pipe reqd @@ fun fd' send_headers ->
+  Xapi_http.with_context (sprintf "WLB %s request" method_name) req fd
     (fun __context ->
       (* This is the signal to say we've taken responsibility from the CLI server for completing the task *)
       (* The GUI can deal with this itself, but the CLI is complicated by the thin cli/cli server split *)
       TaskHelper.set_progress ~__context 0.0 ;
       let parse _response wlb_sock =
-        Http_svr.headers client_sock (Http.http_200_ok ()) ;
-        trim_and_send method_name tag wlb_sock client_sock
+        send_headers
+          [
+            (Http.Hdr.connection, "close")
+          ; ("Cache-Control", "no-cache, no-store")
+          ] ;
+        trim_and_send method_name tag wlb_sock fd'
       in
       try request_func ~__context ~handler:parse with
       | Api_errors.Server_error (_, _) as exn ->
@@ -169,7 +172,7 @@ let handle req fd _method_name tag (method_name, request_func) =
 (* GET /wlb_report?session_id=<session>&task_id=<task>&
                    report=<report name>&<param1>=<value1>&...
 *)
-let report_handler (req : Request.t) (fd : Unix.file_descr) _ =
+let report_handler (req : Request.t) (fd : Unix.file_descr) reqd =
   if not (List.mem_assoc "report" req.Request.query) then (
     error "Request for WLB report lacked 'report' parameter" ;
     failwith "Bad request"
@@ -180,10 +183,10 @@ let report_handler (req : Request.t) (fd : Unix.file_descr) _ =
       (fun (k, _) -> not (List.mem k ["session_id"; "task_id"; "report"]))
       req.Request.query
   in
-  handle req fd "ExecuteReport" report_tag
+  handle req fd reqd "ExecuteReport" report_tag
     (Workload_balancing.wlb_report_request report params)
 
 (* GET /wlb_diagnostics?session_id=<session>&task_id=<task> *)
-let diagnostics_handler (req : Request.t) (fd : Unix.file_descr) _ =
-  handle req fd "GetDiagnostics" diagnostics_tag
+let diagnostics_handler (req : Request.t) (fd : Unix.file_descr) reqd =
+  handle req fd reqd "GetDiagnostics" diagnostics_tag
     Workload_balancing.wlb_diagnostics_request
