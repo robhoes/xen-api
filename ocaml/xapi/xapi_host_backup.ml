@@ -61,11 +61,12 @@ let host_backup_handler_core ~__context s =
         log ;
       raise (Api_errors.Server_error (Api_errors.backup_script_failed, [log]))
 
-let host_backup_handler (req : Request.t) s _ =
+let host_backup_handler (req : Request.t) s reqd =
   req.Request.close <- true ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Xapi_http.with_context "Downloading host backup" req s (fun __context ->
-      Http_svr.headers s (Http.http_200_ok ()) ;
-      host_backup_handler_core ~__context s
+      send_headers [Http.Hdr.connection, "close"; "Cache-Control", "no-cache, no-store"] ;
+      host_backup_handler_core ~__context s'
   )
 
 (** Helper function to prevent double-closes of file descriptors
@@ -76,8 +77,9 @@ let close to_close fd =
   if List.mem fd !to_close then Unix.close fd ;
   to_close := List.filter (fun x -> fd <> x) !to_close
 
-let host_restore_handler (req : Request.t) s _ =
+let host_restore_handler (req : Request.t) s reqd =
   req.Request.close <- true ;
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "Uploading host backup" req s (fun __context ->
       Http_svr.headers s (Http.http_200_ok ()) ;
       let out_pipe, in_pipe = Unix.pipe () in
@@ -102,9 +104,9 @@ let host_restore_handler (req : Request.t) s _ =
                       match req.Request.content_length with
                       | Some i ->
                           debug "got content-length of %s" (Int64.to_string i) ;
-                          Unixext.copy_file ~limit:i s in_pipe
+                          Unixext.copy_file ~limit:i s' in_pipe
                       | None ->
-                          Unixext.copy_file s in_pipe
+                          Unixext.copy_file s' in_pipe
                     in
                     debug "Host restore: read %s bytes of backup..."
                       (Int64.to_string copied_bytes)
