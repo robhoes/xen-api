@@ -48,8 +48,9 @@ let pool_patch_of_update ~__context update_ref =
         (String.concat ";" (List.map (fun patch -> Ref.string_of patch) patches)) ;
       Helpers.internal_error "Invalid state"
 
-let pool_patch_upload_handler (req : Http.Request.t) s _ =
+let pool_patch_upload_handler (req : Http.Request.t) s reqd =
   debug "Patch Upload Handler - Entered..." ;
+  Http_svr.read_body_to_pipe reqd s @@ fun s' ->
   Xapi_http.with_context "Uploading update" req s (fun __context ->
       Helpers.call_api_functions ~__context (fun rpc session_id ->
           (* Strip out the task info here, we'll use a new subtask. This
@@ -85,7 +86,7 @@ let pool_patch_upload_handler (req : Http.Request.t) s _ =
               let vdi_opt =
                 Import_raw_vdi.localhost_handler rpc session_id
                   (Importexport.vdi_of_req ~__context req)
-                  req s s
+                  req s s'
               in
               match vdi_opt with
               | Some vdi -> (
