@@ -18,13 +18,14 @@ module D = Debug.Make (struct let name = "xapi_logs_download" end)
 
 open D
 
-let logs_download_handler (req : Request.t) s _ =
+let logs_download_handler (req : Request.t) s reqd =
   debug "running logs-download handler" ;
+  Http_svr.respond_with_pipe reqd @@ fun s' send_headers ->
   Xapi_http.with_context "Downloading host logs" req s (fun __context ->
-      Http_svr.headers s (Http.http_200_ok ()) ;
-      debug "send the http headers" ;
+      send_headers [Http.Hdr.connection, "close"; "Cache-Control", "no-cache, no-store"] ;
+      debug "sent the http headers" ;
       let pid =
-        safe_close_and_exec None (Some s) None [] !Xapi_globs.logs_download []
+        safe_close_and_exec None (Some s') None [] !Xapi_globs.logs_download []
       in
       waitpid_fail_if_bad_exit pid
   )
