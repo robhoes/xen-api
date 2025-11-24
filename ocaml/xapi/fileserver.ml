@@ -48,11 +48,8 @@ let response_file s send_headers file_path =
   Http_svr.response_file ~mime_content_type ~hsts_time s send_headers file_path
 
 let is_external_http req s =
-  (not (Context.is_unix_socket s)) && Http_svr.https_client_of_req req = None
-
-let access_forbidden req s =
-  (* Reject external non-TLS requests (depending on config) *)
-  !Xapi_globs.website_https_only && is_external_http req s
+(*  (not (Context.is_unix_socket s)) && Http_svr.https_client_of_req req = None *)
+  false
 
 let send_file (uri_base : string) (dir : string) (req : Request.t)
     (s : Unix.file_descr) reqd =
