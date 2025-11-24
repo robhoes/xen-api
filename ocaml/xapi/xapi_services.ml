@@ -180,7 +180,7 @@ let post_handler (req : Http.Request.t) s reqd =
           http_proxy_to_plugin req s name
       | [""; services; "SM"] when services = _services ->
           Storage_mux.Local_domain_socket.xmlrpc_handler
-            Storage_mux.Server.process req s ()
+            Storage_mux.Server.process req s reqd
       | _ ->
           Http_svr.headers s (Http.http_404_missing ~version:"1.0" ()) ;
           req.Http.Request.close <- true

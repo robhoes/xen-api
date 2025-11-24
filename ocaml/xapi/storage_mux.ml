@@ -953,12 +953,13 @@ module Local_domain_socket = struct
   let path = Filename.concat "/var/lib/xcp" "storage"
 
   (* receives external requests on Constants.sm_uri *)
-  let xmlrpc_handler process req s _ =
-    let body = Http_svr.read_body req s in
+  let xmlrpc_handler process _req _s reqd =
+    Http_svr.read_body2 reqd @@ fun body ->
     let rpc = Xmlrpc.call_of_string body in
     (* Printf.fprintf stderr "Request: %s %s\n%!" rpc.Rpc.name (Rpc.to_string (List.hd rpc.Rpc.params)); *)
     let result = process rpc in
     (* Printf.fprintf stderr "Response: %s\n%!" (Rpc.to_string result.Rpc.contents); *)
     let str = Xmlrpc.string_of_response result in
-    Http_svr.response_str req s str
+    let headers = [] in
+    Http_svr.response2 reqd `OK headers str
 end
