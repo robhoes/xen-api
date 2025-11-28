@@ -695,7 +695,7 @@ let handle_connection ~header_read_timeout ~header_total_timeout
   debug "Closing connection" ;
   Unix.close ss
 
-let req_of_r version meth target headers_fold =
+let req_of_r version meth target proxy headers_fold =
   let m =
     match meth with
     | `POST ->
@@ -730,7 +730,13 @@ let req_of_r version meth target headers_fold =
   let path = Uri.path_unencoded uri_t in
   let query = Uri.query uri_t |> kvlist_flatten in
   let close = false in
-  let req = {Http.Request.empty with m; path; query; version; close} in
+  let additional_headers =
+    Atomic.get proxy
+    |> Option.fold ~none:[] ~some:(fun p -> [("STUNNEL_PROXY", p)])
+  in
+  let req =
+    {Http.Request.empty with m; path; query; version; close; additional_headers}
+  in
   headers_fold
     ~f:(fun k v (req : Http.Request.t) ->
       let k = lowercase k in
@@ -789,6 +795,7 @@ module Http2 = struct
   let connection_handler :
          Server.t
       -> Unix.file_descr
+      -> string option Atomic.t
       -> Httpun.Request.t
       -> Bigstringaf.t H2.IOVec.t list
       -> (Server_connection.t, string) result =
@@ -804,21 +811,22 @@ module Http2 = struct
       ) ;
       Body.Writer.close response_body
     in
-    let request_handler x ss : H2.Server_connection.request_handler =
+    let request_handler x ss proxy : H2.Server_connection.request_handler =
      fun reqd ->
       let open H2 in
       let req =
         let r = Reqd.request reqd in
-        req_of_r "2" r.Request.meth r.Request.target
+        req_of_r "2" r.Request.meth r.Request.target proxy
           (Headers.fold r.Request.headers)
       in
       D.debug "Request %s" (Http.Request.to_string req) ;
       route x req ss (H2_reqd reqd)
     in
-    fun x ss http_request request_body ->
+    fun x ss proxy http_request request_body ->
       let {Httpun.Request.headers; target; meth; _} = http_request in
       H2.Server_connection.create_h2c ?config:None ~headers ~target ~meth
-        ~request_body ~error_handler (request_handler x ss)
+        ~request_body ~error_handler
+        (request_handler x ss proxy)
 end
 
 let error_handler (_ : Unix.sockaddr) ?request:_ error start_response =
@@ -833,13 +841,13 @@ let error_handler (_ : Unix.sockaddr) ?request:_ error start_response =
   ) ;
   Body.Writer.close response_body
 
-let upgrade_handler x ss request body upgrade () =
+let upgrade_handler x ss proxy request body upgrade () =
   let connection =
-    Stdlib.Result.get_ok (Http2.connection_handler x ss request body)
+    Stdlib.Result.get_ok (Http2.connection_handler x ss proxy request body)
   in
   upgrade (Gluten.make (module H2.Server_connection) connection)
 
-let request_handler x ss _addr (reqd : Httpun.Reqd.t Gluten.reqd) =
+let request_handler x ss _addr proxy (reqd : Httpun.Reqd.t Gluten.reqd) =
   let open Httpun in
   let {Gluten.reqd; upgrade} = reqd in
   let request = Reqd.request reqd in
@@ -857,7 +865,7 @@ let request_handler x ss _addr (reqd : Httpun.Reqd.t Gluten.reqd) =
           Headers.of_list [("Connection", "Upgrade"); ("Upgrade", "h2c")]
         in
         Reqd.respond_with_upgrade reqd headers
-          (upgrade_handler x ss request !body upgrade)
+          (upgrade_handler x ss proxy request !body upgrade)
       in
       debug "scheduling body ready" ;
       Body.Reader.schedule_read request_body ~on_eof ~on_read
@@ -865,7 +873,7 @@ let request_handler x ss _addr (reqd : Httpun.Reqd.t Gluten.reqd) =
       debug "HTTP1 (no upgrade)" ;
       let req =
         let r = Reqd.request reqd in
-        req_of_r "1.1" r.Request.meth r.Request.target
+        req_of_r "1.1" r.Request.meth r.Request.target proxy
           (Headers.fold r.Request.headers)
       in
       D.debug "Request %s" (Http.Request.to_string req) ;

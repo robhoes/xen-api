@@ -3,6 +3,36 @@ module D = Debug.Make (struct let name = "gluten_unix" end)
 open D
 module Buffer = Gluten.Buffer
 
+module Proxy = struct
+  open Angstrom
+  
+  module AU = Unbuffered
+
+  let is_cr = function '\r' -> true | _ -> false
+
+  let eol = string "\r\n" <?> "eol"
+
+  let proxy = string "PROXY " <?> "PROXY"
+
+  let proxy_header =
+    proxy *> take_till is_cr <* eol <* commit
+
+  let rec transition buf off len = function
+    | AU.Done (consumed, value) ->
+      debug "PROXY: %s (%d)" value consumed ;
+      consumed, Some value
+    | AU.Fail (consumed, _marks, msg) ->
+      debug "NO PROXY: %s (%d)" msg consumed ;
+      consumed, None
+    | AU.Partial { committed; continue } ->
+      (* The first iteration will always hit this, as AU.parse did
+         not get buf yet. *)
+      transition buf off len (continue buf ~off ~len AU.Incomplete)
+
+  let parse_proxy buf off len =
+    transition buf off len (AU.parse proxy_header)
+end
+
 module IO_loop = struct
   let writev socket iovecs =
     try
@@ -50,16 +80,34 @@ module IO_loop = struct
       -> read_buffer_size:int
       -> t
       -> Unix.file_descr
+      -> string option Atomic.t
       -> unit =
-   fun (module Runtime) ~read_buffer_size t socket ->
+   fun (module Runtime) ~read_buffer_size t socket proxy ->
     let write_closed = ref false in
     let read_buffer = Buffer.create read_buffer_size in
+    let checked_proxy = ref false in
+    let check_proxy () =
+      if not !checked_proxy then (
+        debug "checking PROXY" ;
+        (* Read and parse PROXY header, if present *)
+        (* Assumption: the buffer is large enough to fit the entire PROXY header
+           and the first read op from the socket will read the whole header. *)
+        let _ : int = Buffer.get read_buffer ~f:(fun buf ~off ~len ->
+            let consumed, proxy' = Proxy.parse_proxy buf off len in
+            Atomic.set proxy proxy' ;
+            consumed
+        ) in
+        checked_proxy := true
+      )
+    in
     let rec read_loop () =
       let rec read_loop_step () =
         match Runtime.next_read_operation t with
         | `Read ->
+            debug "read request" ;
             ( match read socket read_buffer with
             | _n ->
+                check_proxy () ;
                 let (_ : int) =
                   Buffer.get read_buffer ~f:(fun buf ~off ~len ->
                       Runtime.read t buf ~off ~len
@@ -67,6 +115,7 @@ module IO_loop = struct
                 in
                 ()
             | exception End_of_file ->
+                debug "read EOF" ;
                 let (_ : int) =
                   Buffer.get read_buffer ~f:(fun buf ~off ~len ->
                       Runtime.read_eof t buf ~off ~len
@@ -129,12 +178,6 @@ module IO_loop = struct
         (fun () ->
           Runtime.yield_writer t write_loop ;
           read_loop () ;
-          (*
-      let read_thread = Thread.create (fun () -> read_loop (); debug "! read loop ended") () in
-      write_loop ();
-      debug "! write loop ended";
-      Thread.join read_thread ;
-*)
           debug "! closing socket" ;
           close socket
         )
@@ -147,14 +190,16 @@ module Server = struct
   let create_connection_handler ~read_buffer_size ~protocol connection
       _client_addr socket =
     let connection = Gluten.Server.create ~protocol connection in
-    IO_loop.start (module Gluten.Server) ~read_buffer_size connection socket
+    let proxy = Atomic.make None in
+    IO_loop.start (module Gluten.Server) ~read_buffer_size connection socket proxy
 
   let create_upgradable_connection_handler ~read_buffer_size ~protocol
       ~create_protocol ~request_handler (client_addr : Unix.sockaddr) socket =
+    let proxy = Atomic.make None in
     let connection =
       Gluten.Server.create_upgradable ~protocol ~create:create_protocol
-        (request_handler client_addr)
+        (request_handler client_addr proxy)
     in
     debug "Gluten_unix.Server.create_upgradable_connection_handler" ;
-    IO_loop.start (module Gluten.Server) ~read_buffer_size connection socket
+    IO_loop.start (module Gluten.Server) ~read_buffer_size connection socket proxy
 end
