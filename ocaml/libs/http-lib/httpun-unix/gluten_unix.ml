@@ -203,10 +203,10 @@ module IO_loop = struct
           debug "%s" (Printexc.to_string exn) ;
           Runtime.report_exn t exn
     in
+    Runtime.yield_writer t write_loop ;
     let _ : Thread.t =
       Thread.create
         (fun () ->
-          Runtime.yield_writer t write_loop ;
           read_loop () ;
           debug "! closing socket" ;
           close socket
@@ -232,4 +232,29 @@ module Server = struct
     in
     debug "Gluten_unix.Server.create_upgradable_connection_handler" ;
     IO_loop.start (module Gluten.Server) ~read_buffer_size connection socket proxy
+end
+
+module Client = struct
+  type t =
+    { connection : Gluten.Client.t
+    ; shutdown_reader : unit -> unit
+    }
+
+  let create ~read_buffer_size ~protocol connection socket =
+    let connection = Gluten.Client.create ~protocol connection in
+    let proxy = Atomic.make None in
+    IO_loop.start (module Gluten.Client) ~read_buffer_size connection socket proxy ;
+    { connection
+    ; shutdown_reader =
+        fun () -> ()
+        (* TODO: add code to cancel any in-progress blocking read *)
+    }
+
+  let upgrade t protocol = Gluten.Client.upgrade_protocol t.connection protocol
+
+  let shutdown t =
+    t.shutdown_reader ();
+    Gluten.Client.shutdown t.connection
+
+  let is_closed t = Gluten.Client.is_closed t.connection
 end
