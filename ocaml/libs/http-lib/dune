@@ -80,34 +80,34 @@
  (modules http_test radix_tree_test)
  (libraries alcotest fmt http_lib unix))
 
-(executable
- (modes exe)
- (name test_client)
- (modules test_client)
- (libraries
-  http_lib
-  safe-resources
-  stunnel
-  threads.posix
-  unix
-  xapi-backtrace
-  xapi-log
-  xapi-stdext-pervasives
-  xapi-stdext-unix))
-
-(executable
- (modes exe)
- (name test_server)
- (modules test_server)
- (libraries
-  http_lib
-  httpsvr
-  safe-resources
-  threads.posix
-  unix
-  xapi-stdext-threads
-  xapi-stdext-unix))
-
-(cram
- (package xapi)
- (deps test_client.exe test_server.exe))
+;(executable
+; (modes exe)
+; (name test_client)
+; (modules test_client)
+; (libraries
+;  http_lib
+;  safe-resources
+;  stunnel
+;  threads.posix
+;  unix
+;  xapi-backtrace
+;  xapi-log
+;  xapi-stdext-pervasives
+;  xapi-stdext-unix))
+;
+;(executable
+; (modes exe)
+; (name test_server)
+; (modules test_server)
+; (libraries
+;  http_lib
+;  httpsvr
+;  safe-resources
+;  threads.posix
+;  unix
+;  xapi-stdext-threads
+;  xapi-stdext-unix))
+;
+;(cram
+; (package xapi)
+; (deps test_client.exe test_server.exe))

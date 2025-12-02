@@ -24,7 +24,7 @@ let _ =
           Condition.signal finished_c
       )
   ) ;
-  Server.add_handler server Http.Post "/echo" (fun request s _ ->
+  Server.add_handler server Http.Post "/echo" (fun request s reqd ->
       match request.Http.Request.content_length with
       | None ->
           Unixext.really_write_string s
@@ -32,12 +32,8 @@ let _ =
                (Http.Response.make "404" "content length missing")
             )
       | Some l ->
-          let txt = Unixext.really_read_string s (Int64.to_int l) in
-          let r =
-            Http.Response.to_wire_string
-              (Http.Response.make ~body:txt "200" "OK")
-          in
-          Unixext.really_write_string s r
+          Http_svr.read_body2 reqd @@ fun txt ->
+          Http_svr.response2 reqd `OK [] txt
   ) ;
   Server.add_handler server Http.Get "/stats" (fun _ s _ ->
       let lines =
@@ -77,7 +73,7 @@ let _ =
   let inet_addr = Unix.inet_addr_of_string ip in
   let addr = Unix.ADDR_INET (inet_addr, !port) in
   let socket = Http_svr.bind ~listen_backlog:5 addr "server" in
-  start ~conn_limit:1024 server socket ;
+  start2 ~conn_limit:1024 server socket ;
   Printf.printf "Server started on %s:%d\n" ip !port ;
   with_lock finished_m (fun () ->
       while not !finished do
