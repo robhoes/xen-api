@@ -3,6 +3,29 @@ module D = Debug.Make (struct let name = "gluten_unix" end)
 open D
 module Buffer = Gluten.Buffer
 
+
+module Frame = struct
+  (* from http.ml *)
+  let smallest_request = "GET / HTTP/1.0\r\n\r\n"
+
+  (* from http.ml *)
+  (* let smallest_response = "HTTP/1.0 200 OK\r\n\r\n" *)
+  let frame_header_length = String.length smallest_request
+
+  (* adapted from http.ml *)
+  let read_frame_header buf off len =
+    if len < frame_header_length then
+      None
+    else
+      let prefix = Bigstringaf.substring buf off frame_header_length in
+      try Scanf.sscanf prefix "FRAME %012d" (fun x -> Some x) with _ -> None
+
+  let skip buf off len =
+    match read_frame_header buf off len with
+    | None -> 0
+    | Some _ -> frame_header_length
+end
+
 module Proxy = struct
   open Angstrom
   
@@ -100,6 +123,12 @@ module IO_loop = struct
         checked_proxy := true
       )
     in
+    let check_frame () =
+      let _ : int = Buffer.get read_buffer ~f:(fun buf ~off ~len ->
+          Frame.skip buf off len
+      ) in
+      ()
+    in
     let rec read_loop () =
       let rec read_loop_step () =
         match Runtime.next_read_operation t with
@@ -108,6 +137,7 @@ module IO_loop = struct
             ( match read socket read_buffer with
             | _n ->
                 check_proxy () ;
+                check_frame () ;
                 let (_ : int) =
                   Buffer.get read_buffer ~f:(fun buf ~off ~len ->
                       Runtime.read t buf ~off ~len
