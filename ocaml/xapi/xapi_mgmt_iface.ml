@@ -143,7 +143,7 @@ module Client_certificate_auth_server = struct
       Unixext.mkdir_safe (Filename.dirname sock_path) 0o700 ;
       Unixext.unlink_safe sock_path ;
       let domain_sock = Xapi_http.bind (Unix.ADDR_UNIX sock_path) in
-      Http_svr.start
+      Http_svr.start2
         ~conn_limit:!Xapi_globs.conn_limit_clientcert
         Xapi_http.server domain_sock ;
       management_server := Some domain_sock

@@ -84,7 +84,7 @@ let _ =
           remote_database_access_handler_v1 ;
         Http_svr.Server.add_handler server Http.Post "/post_remote_db_access_v2"
           remote_database_access_handler_v2 ;
-        Http_svr.start ~conn_limit:1024 server socket ;
+        Http_svr.start2 ~conn_limit:1024 server socket ;
         Printf.printf "server listening\n%!" ;
         if !self_test then (
           Printf.printf "Running unit-tests\n%!" ;

@@ -456,6 +456,7 @@ let escape str =
 
 exception Generic_error of string
 
+(*
 (** [read_request_exn fd] reads a single Http.req from [fd] and returns it. On error
     	it simply throws an exception and doesn't touch the output stream. *)
 let read_request_exn ~proxy_seen ~read_timeout ~total_timeout ~max_length fd =
@@ -539,8 +540,7 @@ let read_request_exn ~proxy_seen ~read_timeout ~total_timeout ~max_length fd =
                  )
                )
              | None ->
-                 (true, req)
-           (* end of headers *)
+                 (true, req) (* end of headers *)
          )
          (false, {empty with Http.Request.frame; additional_headers})
     |> snd
@@ -611,7 +611,7 @@ let read_request ?proxy_seen ~read_timeout ~total_timeout ~max_length fd =
               ~extra:(escape (Printexc.to_string exc))
     ) ;
     (None, None)
-
+*)
 let handle_one (x : Server.t) ss req =
   let@ req = Helper.with_tracing ~name:__FUNCTION__ req in
   let span = Helper.traceparent_of req in
@@ -661,6 +661,7 @@ let handle_one (x : Server.t) ss req =
     ) ;
     !finished
 
+(*
 let handle_connection ~header_read_timeout ~header_total_timeout
     ~max_header_length (x : Server.t) caller ss =
   ( match caller with
@@ -688,12 +689,14 @@ let handle_connection ~header_read_timeout ~header_total_timeout
     (* 2. now we attempt to process the request *)
     let finished = Option.fold ~none:true ~some:(handle_one x ss) req in
     (* 3. do it again if the connection is kept open, but without timeouts *)
-    if not finished then loop ~read_timeout:None ~total_timeout:None proxy
+    if not finished then
+      loop ~read_timeout:None ~total_timeout:None proxy
   in
   loop ~read_timeout:header_read_timeout ~total_timeout:header_total_timeout
     None ;
   debug "Closing connection" ;
   Unix.close ss
+*)
 
 let req_of_r version meth target proxy headers_fold =
   let m =
@@ -954,6 +957,7 @@ let socket_table = Hashtbl.create 10
 
 type socket = Unix.file_descr * string
 
+(*
 (* Start an HTTP server on a new socket *)
 let start ?header_read_timeout ?header_total_timeout ?max_header_length
     ~conn_limit (x : Server.t) (socket, name) =
@@ -968,7 +972,7 @@ let start ?header_read_timeout ?header_total_timeout ?max_header_length
   in
   let server = Server_io.server ~by_thread:true handler socket in
   Hashtbl.add socket_table socket server
-
+*)
 (* Start an HTTP server on a new socket *)
 let start2 ~conn_limit (x : Server.t) (socket, name) =
   let handler =

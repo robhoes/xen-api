@@ -34,19 +34,18 @@ open D
 open Xapi_stdext_pervasives.Pervasiveext
 
 (* A helper method for processing XMLRPC requests. *)
-let xmlrpc_handler process req s context =
-  let body = Http_svr.read_body req s in
+let xmlrpc_handler process req s reqd =
+  Http_svr.read_body2 reqd @@ fun body ->
   let rpc = Xmlrpc.call_of_string body in
   try
-    let result = process context rpc in
+    let result = process reqd rpc in
     let str = Xmlrpc.string_of_response result in
-    Http_svr.response_str req s str
+    Http_svr.response2 reqd `OK [] str
   with e ->
     debug "Caught %s" (Printexc.to_string e) ;
     debug "Backtrace: %s" (Printexc.get_backtrace ()) ;
-    Http_svr.response_unauthorised ~req
+    Http_svr.response_unauthorised2 reqd
       (Printf.sprintf "Go away: %s" (Printexc.to_string e))
-      s
 
 (* Bind the service interface to the server implementation. *)
 (* A helper function for processing HTTP requests on a socket. *)
@@ -90,7 +89,7 @@ let start (xmlrpc_path, http_fwd_path) process =
   Xapi_stdext_unix.Unixext.mkdir_safe (Filename.dirname xmlrpc_path) 0o700 ;
   Xapi_stdext_unix.Unixext.unlink_safe xmlrpc_path ;
   let xmlrpc_socket = Http_svr.bind (Unix.ADDR_UNIX xmlrpc_path) "unix_rpc" in
-  Http_svr.start ~conn_limit:1024 server xmlrpc_socket ;
+  Http_svr.start2 ~conn_limit:1024 server xmlrpc_socket ;
   Xapi_stdext_unix.Unixext.unlink_safe http_fwd_path ;
   let http_fwd_socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.bind http_fwd_socket (Unix.ADDR_UNIX http_fwd_path) ;

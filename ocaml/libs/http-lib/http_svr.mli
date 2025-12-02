@@ -62,6 +62,7 @@ val bind : ?listen_backlog:int -> Unix.sockaddr -> string -> socket
 (* [bind_retry]: like [bind] but will catch (possibly transient exceptions) and retry *)
 val bind_retry : ?listen_backlog:int -> Unix.sockaddr -> socket
 
+(*
 val start :
      ?header_read_timeout:float
   -> ?header_total_timeout:float
@@ -70,10 +71,11 @@ val start :
   -> Server.t
   -> socket
   -> unit
-
+*)
 val start2 : conn_limit:int -> Server.t -> socket -> unit
 
 val handle_one : Server.t -> Unix.file_descr -> Http.Request.t -> bool
+(* still used for routing by xcp-rrdd *)
 
 exception Socket_not_found
 
@@ -85,6 +87,7 @@ type status_code = [`OK | `Not_found | `Unauthorized | `Internal_server_error]
 
 type send_headers = (string * string) list -> unit
 
+(*
 val response_fct :
      Http.Request.t
   -> ?hdrs:(string * string) list
@@ -92,6 +95,7 @@ val response_fct :
   -> int64
   -> (Unix.file_descr -> unit)
   -> unit
+*)
 
 val response_str :
      Http.Request.t
@@ -104,6 +108,8 @@ val response_missing2 : ?hdrs:(string * string) list -> reqd -> string -> unit
 
 val response_missing :
   ?hdrs:(string * string) list -> Unix.file_descr -> string -> unit
+
+val response_unauthorised2 : reqd -> string -> unit
 
 val response_unauthorised :
   ?req:Http.Request.t -> string -> Unix.file_descr -> unit
@@ -134,13 +140,15 @@ val response_file :
   -> send_headers
   -> string
   -> unit
+(* copies file straight to socket; should be updated to used reqd writer *)
 
 val respond_to_options : Http.Request.t -> Unix.file_descr -> unit
 
 val headers : Unix.file_descr -> string list -> unit
 
+(*
 val read_body : ?limit:int -> Http.Request.t -> Unix.file_descr -> string
-
+*)
 val read_body2 : reqd -> (string -> unit) -> unit
 
 val read_body_to_pipe :
