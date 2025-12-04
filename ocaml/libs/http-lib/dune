@@ -20,8 +20,11 @@
  (libraries
   astring
   base64
+  bigstringaf
   fmt
   ipaddr
+  httpun
+  httpun-unix
   mtime
   mtime.clock.os
   rpclib.core

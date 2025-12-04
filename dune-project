@@ -179,7 +179,7 @@
   (xapi-types
    (= :version))
   (xapi-stdext-zerocheck
-    (= :version)))
+   (= :version)))
  (synopsis "A CLI for xapi storage services")
  (description
   "The CLI allows you to directly manipulate virtual disk images, without them being attached to VMs."))
@@ -191,7 +191,7 @@
  (name xapi-schema))
 
 (package
-  (name xapi-work-queues))
+ (name xapi-work-queues))
 
 (package
  (name rrdd-plugin)
@@ -236,7 +236,8 @@
   logs
   mtime
   xapi-backtrace
-  (xapi-stdext-pervasives (= :version))))
+  (xapi-stdext-pervasives
+   (= :version))))
 
 (package
  (name xapi-idl))
@@ -406,7 +407,8 @@
   (http-lib
    (and
     :with-test
-    (= :version))) ; the public library is only used for testing
+    (= :version)))
+  ; the public library is only used for testing
   integers
   ipaddr
   logs
@@ -546,26 +548,32 @@
 (package
  (name vhd-format)
  (synopsis "Pure OCaml library to read/write VHD format data")
- (description "A pure OCaml library to read and write [vhd](http://en.wikipedia.org/wiki/VHD_(file_format)) format data, plus a simple command-line tool which allows vhd files to be interrogated, manipulated, format-converted and streamed to and from files and remote servers.")
+ (description
+  "A pure OCaml library to read and write [vhd](http://en.wikipedia.org/wiki/VHD_(file_format)) format data, plus a simple command-line tool which allows vhd files to be interrogated, manipulated, format-converted and streamed to and from files and remote servers.")
  (authors "Jon Ludlam" "Dave Scott")
  (maintainers "Dave Scott <dave@recoil.org>")
  (homepage "https://github.com/mirage/ocaml-vhd")
  (tags
   ("org:mirage" "org:xapi-project"))
  (depends
-  (ocaml (>= "4.10.0"))
-  (bigarray-compat (>= "1.1.0"))
-  (cstruct (>= "6.0.0"))
+  (ocaml
+   (>= "4.10.0"))
+  (bigarray-compat
+   (>= "1.1.0"))
+  (cstruct
+   (>= "6.0.0"))
   io-page
   yojson
   (rresult
    (>= "0.3.0"))
-  (uuidm (>= "0.9.9"))
+  (uuidm
+   (>= "0.9.9"))
   stdlib-shims
   dune
-  (ppx_cstruct (and :build (>= "3.0.0")))
- )
-)
+  (ppx_cstruct
+   (and
+    :build
+    (>= "3.0.0")))))
 
 (package
  (name vhd-format-lwt)
@@ -607,14 +615,9 @@
     (>= "2.4.0")))))
 
 (package
-  (name qcow-stream-tool)
-  (synopsis "Minimal CLI wrapper for qcow-stream")
-  (depends
-    qcow-stream
-    cmdliner
-    yojson
-  )
-)
+ (name qcow-stream-tool)
+ (synopsis "Minimal CLI wrapper for qcow-stream")
+ (depends qcow-stream cmdliner yojson))
 
 (package
  (name varstored-guard))
@@ -625,12 +628,10 @@
  (description
   "This library allows xapi to use UUIDs with phantom types to avoid mixing UUIDs from different classes of objects. It's based on `uuidm`.")
  (depends
-   (alcotest :with-test)
-   (fmt :with-test)
-   ptime
-   uuidm
- )
-)
+  (alcotest :with-test)
+  (fmt :with-test)
+  ptime
+  uuidm))
 
 (package
  (name stunnel)
@@ -712,7 +713,8 @@
    (= :version))
   (xapi-stdext-threads
    (= :version))
-  (xapi-tracing (= :version))
+  (xapi-tracing
+   (= :version))
   (odoc :with-doc)))
 
 (package
@@ -732,7 +734,8 @@
   rpclib
   (xapi-stdext-threads
    (= :version))
-  (xapi-tracing (= :version))))
+  (xapi-tracing
+   (= :version))))
 
 (package
  (name message-switch))
@@ -778,6 +781,12 @@
   (xml-light2
    (= :version))
   (odoc :with-doc)))
+
+(package
+ (name httpun-unix)
+ (synopsis "An extension to httpun for the unix backend")
+ (description "")
+ (depends httpun h2 gluten angstrom faraday bigstringaf xapi-log))
 
 (package
  (name gzip))
