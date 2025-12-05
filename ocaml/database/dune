@@ -51,6 +51,7 @@
   threads.posix
   http_lib
   httpsvr
+  httpun-unix
   unix
   uuid
   xapi-backtrace

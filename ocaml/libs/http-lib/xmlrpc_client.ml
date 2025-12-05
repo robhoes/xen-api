@@ -379,6 +379,10 @@ let with_http request f s =
   try Http_client.rpc s request (fun response s -> f (response, s))
   with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
 
+let with_http2 request f conn =
+  try Http_client2.rpc conn request f
+  with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
+
 let curry2 f (a, b) = f a b
 
 module type FORMAT = sig

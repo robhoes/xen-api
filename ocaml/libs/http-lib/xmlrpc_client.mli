@@ -61,6 +61,12 @@ val with_http :
     received after sending HTTP [request] and [fd] is still connected to
     	the client. *)
 
+val with_http2 :
+     Http.Request.t
+  -> (Http.Response.t -> unit)
+  -> Httpun_unix.Client.t
+  -> unit
+
 val xmlrpc :
      ?frame:bool
   -> ?version:string

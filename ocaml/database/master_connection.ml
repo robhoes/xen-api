@@ -204,6 +204,8 @@ let restart_on_connection_timeout = ref true
 
 exception Content_length_required
 
+let httpun_conn = ref None
+
 let do_db_xml_rpc_persistent_with_reopen ~host:_ ~path (req : string) :
     Db_interface.response =
   let time_call_started = Unix.gettimeofday () in
@@ -278,29 +280,37 @@ let do_db_xml_rpc_persistent_with_reopen ~host:_ ~path (req : string) :
       in
       match !my_connection with
       | None ->
+          Option.iter Httpun_unix.Client.shutdown !httpun_conn ;
+          httpun_conn := None ;
           raise Goto_handler
       | Some stunnel_proc ->
           let fd = stunnel_proc.Stunnel.fd in
+          let conn =
+            match !httpun_conn with
+            | None ->
+              let conn = Httpun_unix.Client.create_connection Unixfd.(!fd) in
+              debug "set up httpun connection" ;
+              httpun_conn := Some conn ;
+              conn
+            | Some conn -> conn
+          in
           with_timestamp (fun () ->
-              with_http request
-                (fun (response, _) ->
+              with_http2 request
+                (fun response ->
                   (* XML responses must have a content-length because we cannot use the Xml.parse_in
                      in_channel function: the input channel will buffer an arbitrary amount of stuff
                      and we'll be out of sync with the next request. *)
                   let res =
-                    match response.Http.Response.content_length with
+                    match response.Http.Response.body with
                     | None ->
                         raise Content_length_required
-                    | Some l ->
-                        Xapi_stdext_unix.Unixext.really_read_string
-                          Unixfd.(!fd)
-                          (Int64.to_int l)
+                    | Some b -> b
                   in
                   write_ok := true ;
                   result := res
                   (* yippeee! return and exit from while loop *)
                 )
-                Unixfd.(!fd)
+                conn
           )
     with
     | Http.Client_requested_size_over_limit ->
