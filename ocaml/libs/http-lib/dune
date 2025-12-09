@@ -23,7 +23,9 @@
   bigstringaf
   fmt
   ipaddr
+  gluten
   httpun
+  h2
   httpun-unix
   mtime
   mtime.clock.os

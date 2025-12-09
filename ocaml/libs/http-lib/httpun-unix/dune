@@ -1,4 +1,5 @@
 (library
  (name httpun_unix)
  (public_name httpun-unix)
+ (wrapped false)
  (libraries unix threads.posix httpun h2 gluten angstrom faraday bigstringaf xapi-log))

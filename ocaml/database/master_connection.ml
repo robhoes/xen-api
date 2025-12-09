@@ -280,7 +280,7 @@ let do_db_xml_rpc_persistent_with_reopen ~host:_ ~path (req : string) :
       in
       match !my_connection with
       | None ->
-          Option.iter Httpun_unix.Client.shutdown !httpun_conn ;
+          Option.iter Http_client2.disconnect !httpun_conn ;
           httpun_conn := None ;
           raise Goto_handler
       | Some stunnel_proc ->
@@ -288,7 +288,7 @@ let do_db_xml_rpc_persistent_with_reopen ~host:_ ~path (req : string) :
           let conn =
             match !httpun_conn with
             | None ->
-              let conn = Httpun_unix.Client.create_connection Unixfd.(!fd) in
+              let conn = Http_client2.connect Unixfd.(!fd) in
               debug "set up httpun connection" ;
               httpun_conn := Some conn ;
               conn

@@ -64,7 +64,7 @@ val with_http :
 val with_http2 :
      Http.Request.t
   -> (Http.Response.t -> unit)
-  -> Httpun_unix.Client.t
+  -> Http_client2.connection
   -> unit
 
 val xmlrpc :
