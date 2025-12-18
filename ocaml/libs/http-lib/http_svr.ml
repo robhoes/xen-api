@@ -806,9 +806,11 @@ module Http2 = struct
       let response_body = start_response Headers.empty in
       ( match error with
       | `Exn exn ->
+          debug "HTTP/2 error: %s" (Printexc.to_string exn) ;
           Body.Writer.write_string response_body (Printexc.to_string exn) ;
           Body.Writer.write_string response_body "\n"
       | #Status.standard as error ->
+          debug "HTTP/2 error: %s" (Status.default_reason_phrase error) ;
           Body.Writer.write_string response_body
             (Status.default_reason_phrase error)
       ) ;
@@ -827,8 +829,8 @@ module Http2 = struct
     in
     fun x ss proxy http_request request_body ->
       let {Httpun.Request.headers; target; meth; _} = http_request in
-      H2.Server_connection.create_h2c ?config:None ~headers ~target ~meth
-        ~request_body ~error_handler
+      H2.Server_connection.create_h2c ~headers ~target ~meth ~request_body
+        ~error_handler
         (request_handler x ss proxy)
 end
 
@@ -891,7 +893,9 @@ let handle_connection2 (x : Server.t) caller ss =
         (Unix.string_of_inet_addr addr)
         port
   ) ;
+  let read_buffer_size = H2.Config.default.read_buffer_size in
   Httpun_unix.Server.create_connection_handler
+    ~config:{Httpun.Config.default with read_buffer_size}
     ~request_handler:(request_handler x ss) ~error_handler caller ss
 
 let bind ?(listen_backlog = 128) sockaddr name =

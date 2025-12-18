@@ -110,7 +110,7 @@ module Http2 = struct
       | `Malformed_response err -> Format.sprintf "Malformed response: %s" err
       | `Invalid_response_body_length _ -> "Invalid body length"
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
-      | `Protocol_error _ -> "Protocol error"
+      | `Protocol_error (c, s) -> Format.sprintf "Protocol error: %s %s" (H2.Error_code.to_string c) s
     in
     error "Error handling HTTP/2 connection: %s\n" err
 
@@ -121,7 +121,8 @@ module Http2 = struct
     H2_unix.Client.shutdown conn
 
   let request_of_request req =
-    let headers = Headers.of_list (to_header_list req) in
+    let headers = List.remove_assoc Http.Hdr.connection (to_header_list req) in
+    let headers = Headers.of_list headers in
     let meth = of_method req.m in
     let query = if req.query = [] then "" else "?" ^ kvpairs req.query in
     Request.create ~headers ~scheme:"https" meth (req.path ^ query)
@@ -157,17 +158,15 @@ module Http2 = struct
       let b = Buffer.contents body in
       debug "BODY: %s" b ; callback (response_of_response response (Some b))
     in
-    debug "scheduling body ready" ;
+    debug "HTTP/2 scheduling body ready" ;
     Body.Reader.schedule_read response_body ~on_eof ~on_read
 
   let handler callback response response_body =
-    debug "Got response" ;
+    debug "HTTP/2 response %s" (Format.asprintf "%a" Response.pp_hum response) ;
     match response with
     | { Response.status = `OK; _ } as response ->
-      Format.fprintf Format.std_formatter "%a\n" Response.pp_hum response;
       read_body response response_body callback
     | response ->
-      Format.fprintf Format.err_formatter "%a\n" Response.pp_hum response ;
       callback (response_of_response response None)
 
   let request_error_handler finish err =
@@ -176,7 +175,7 @@ module Http2 = struct
       | `Malformed_response err -> Format.sprintf "Malformed response: %s" err
       | `Invalid_response_body_length _ -> "Invalid body length"
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
-      | `Protocol_error _ -> "Protocol error"
+      | `Protocol_error (c, s) -> Format.sprintf "Protocol error: %s %s" (H2.Error_code.to_string c) s
     in
     error "Error handling HTTP/2 response: %s\n" err ;
     finish ()
@@ -201,6 +200,7 @@ module Http2 = struct
     debug "doing HTTP/2 request" ;
 
     let request = request_of_request req in
+    debug "HTTP/2 request %s" (Format.asprintf "%a" Request.pp_hum request) ;
     let request_body =
       H2_unix.Client.request
         ~error_handler:(request_error_handler finish)
@@ -240,10 +240,10 @@ module Http2 = struct
     in
     (match result with
     | Ok connection ->
-      debug "Connection state changed (HTTP/2 confirmed)\n%!";
+      debug "Connection state changed (HTTP/2 confirmed)";
       t.conn <- H2_conn connection
     | Error e ->
-      error "Failed to upgrade connection to HTTP/2: %s\n%!" e;
+      error "Failed to upgrade connection to HTTP/2: %s" e;
       ()
     )
 end
@@ -252,7 +252,9 @@ module Http1 = struct
   open Httpun
 
   let connect fd =
-    Httpun_unix.Client.create_connection fd
+    let read_buffer_size = H2.Config.default.read_buffer_size in
+    Httpun_unix.Client.create_connection
+      ~config:{Httpun.Config.default with read_buffer_size} fd
 
   let disconnect conn =
     Httpun_unix.Client.shutdown conn
@@ -302,21 +304,17 @@ module Http1 = struct
       let b = Buffer.contents body in
       debug "BODY: %s" b ; callback (response_of_response response (Some b))
     in
-    debug "scheduling body ready" ;
+    debug "HTTP/1.x scheduling body ready" ;
     Body.Reader.schedule_read response_body ~on_eof ~on_read
 
   let handler t conn request callback response response_body =
-    debug "Got response" ;
+    debug "HTTP/1.x response %s" (Format.asprintf "%a" Response.pp_hum response) ;
     match response with
     | { Response.status = `OK; _ } as response ->
-      Format.fprintf Format.std_formatter "%a\n" Response.pp_hum response;
       read_body response response_body callback
-    | { Response.status = `Switching_protocols; _ } as response ->
-      debug "101 Switching protocols" ;
-      Format.fprintf Format.std_formatter "%a\n\n%!" Response.pp_hum response ;
+    | { Response.status = `Switching_protocols; _ } ->
       Http2.upgrade_hander t request callback
     | response ->
-      Format.fprintf Format.err_formatter "%a\n" Response.pp_hum response ;
       callback (response_of_response response None)
 
   let error_handler finish err =
@@ -326,7 +324,7 @@ module Http1 = struct
       | `Invalid_response_body_length _ -> "Invalid body length"
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
     in
-    error "Error handling HTTP/1.x response: %s\n" err ;
+    error "Error handling HTTP/1.x response: %s" err ;
     finish ()
 
   let do_request t conn req upgrade f : unit =
