@@ -319,6 +319,7 @@ let with_transport ?(stunnel_wait_disconnect = true) transport f =
       , host
       , port
       ) ->
+      let use_stunnel_cache = false in
       let st_proc' f =
         if use_stunnel_cache then
           with_reusable_stunnel ~use_fork_exec_helper ~write_to_log ?verify_cert
