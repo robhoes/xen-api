@@ -45,7 +45,10 @@ let to_header_list req =
     Option.fold ~none:[] ~some:(fun req -> [Http.Hdr.accept, req]) req.accept
   in
   let content_length =
-    Option.fold ~none:[]
+    Option.fold
+      ~none:(Option.fold ~none:[] ~some:(fun body ->
+        [Http.Hdr.content_length, Printf.sprintf "%d" (String.length body)]
+        ) req.body)
       ~some:(fun req -> [Http.Hdr.content_length, Printf.sprintf "%Ld" req])
       req.content_length
   in
@@ -112,7 +115,8 @@ module Http2 = struct
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
       | `Protocol_error (c, s) -> Format.sprintf "Protocol error: %s %s" (H2.Error_code.to_string c) s
     in
-    error "Error handling HTTP/2 connection: %s\n" err
+    error "Error handling HTTP/2 connection: %s\n" err ;
+    raise End_of_file (* TODO: raise appropiate error *)
 
   let connect fd =
     H2_unix.Client.create_connection ~error_handler fd
@@ -145,6 +149,8 @@ module Http2 = struct
     }
 
   let read_body response response_body callback =
+    if not (Headers.mem response.Response.headers Http.Hdr.content_length) then
+      debug "no content_length!" ;
     let body = Buffer.create 1024 in
     let rec on_read buffer ~off ~len =
       debug "on_read" ;
@@ -169,7 +175,7 @@ module Http2 = struct
     | response ->
       callback (response_of_response response None)
 
-  let request_error_handler finish err =
+  let request_error_handler err =
     let err =
       match err with
       | `Malformed_response err -> Format.sprintf "Malformed response: %s" err
@@ -177,25 +183,21 @@ module Http2 = struct
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
       | `Protocol_error (c, s) -> Format.sprintf "Protocol error: %s %s" (H2.Error_code.to_string c) s
     in
-    error "Error handling HTTP/2 response: %s\n" err ;
-    finish ()
+    error "Error handling HTTP/2 response: %s\n" err
 
-  let do_request _t conn req f : unit =
-    let m = Mutex.create () in
-    let exit_cond = Condition.create () in
-    let finished = ref false in
-    let finish () =
-      finished := true ;
-      Condition.broadcast exit_cond
-    in
-
+  let do_request _t conn req f =
+    let ch = Event.new_channel () in
     let response_handler =
       handler (fun response ->
         debug "EOF" ;
-        Mutex.protect m finish ;
-        let _ = f response in
-        ()
+        f response
+        |> Event.send ch
+        |> Event.sync
       )
+    in
+    let error_handler err =
+      request_error_handler err ;
+      raise End_of_file (* TODO: raise appropiate error *)
     in
     debug "doing HTTP/2 request" ;
 
@@ -203,7 +205,7 @@ module Http2 = struct
     debug "HTTP/2 request %s" (Format.asprintf "%a" Request.pp_hum request) ;
     let request_body =
       H2_unix.Client.request
-        ~error_handler:(request_error_handler finish)
+        ~error_handler
         ~response_handler
         conn
         request
@@ -215,18 +217,14 @@ module Http2 = struct
     Body.Writer.close request_body ;
 
     debug "waiting for response......" ;
-    Mutex.protect m (fun () ->
-      while not !finished do
-        Condition.wait exit_cond m
-      done
-    )
+    Event.receive ch |> Event.sync
 
   let upgrade_hander t request callback =
     let { conn=(H1_conn {Httpun_unix.Client.runtime; _} | H2_conn {H2_unix.Client.runtime; _}) } = t in
     let { Httpun.Request.headers; meth; target; _ } = request in
     let connection = H2.Client_connection.create_h2c ~headers ~target ~meth
       ~error_handler
-      (handler callback, request_error_handler (fun () -> ())) in
+      (handler callback, request_error_handler) in
     let result = Result.map
       (fun connection ->
          (* Perform the runtime upgrade -- stop speaking HTTP/1.1, start
@@ -244,7 +242,7 @@ module Http2 = struct
       t.conn <- H2_conn connection
     | Error e ->
       error "Failed to upgrade connection to HTTP/2: %s" e;
-      ()
+      raise End_of_file (* TODO: raise appropiate error *)
     )
 end
 
@@ -317,39 +315,35 @@ module Http1 = struct
     | response ->
       callback (response_of_response response None)
 
-  let error_handler finish err =
+  let error_handler err =
     let err =
       match err with
       | `Malformed_response err -> Format.sprintf "Malformed response: %s" err
       | `Invalid_response_body_length _ -> "Invalid body length"
       | `Exn exn -> Format.sprintf "Exn raised: %s" (Printexc.to_string exn)
     in
-    error "Error handling HTTP/1.x response: %s" err ;
-    finish ()
+    error "Error handling HTTP/1.x response: %s" err
 
-  let do_request t conn req upgrade f : unit =
-    let m = Mutex.create () in
-    let exit_cond = Condition.create () in
-    let finished = ref false in
-    let finish () =
-      finished := true ;
-      Condition.broadcast exit_cond
-    in
-
+  let do_request t conn req upgrade f =
+    let ch = Event.new_channel () in
     let request = request_of_request req upgrade in
     let response_handler =
       handler t conn request (fun response ->
         debug "EOF" ;
-        Mutex.protect m finish ;
-        let _ = f response in
-        ()
+        f response
+        |> Event.send ch
+        |> Event.sync
       )
+    in
+    let error_handler err =
+      error_handler err ;
+      raise End_of_file (* TODO: raise appropiate error *)
     in
     debug "doing HTTP/1.1 request" ;
 
     let request_body =
       Httpun_unix.Client.request
-        ~error_handler:(error_handler finish)
+        ~error_handler
         ~response_handler
         conn
         request
@@ -361,11 +355,7 @@ module Http1 = struct
     Body.Writer.close request_body ;
 
     debug "waiting for response......" ;
-    Mutex.protect m (fun () ->
-      while not !finished do
-        Condition.wait exit_cond m
-      done
-    )
+    Event.receive ch |> Event.sync
 end
 
 let connect fd : t =
@@ -376,7 +366,7 @@ let disconnect t : unit =
   | H1_conn conn -> Http1.disconnect conn
   | H2_conn conn -> Http2.disconnect conn
 
-let with_connection fd f =
+let with_connection fd (f : t -> 'a) : 'a =
   let connection = connect fd in
   debug "set up httpun connection" ;
   Xapi_stdext_pervasives.Pervasiveext.finally
@@ -389,7 +379,7 @@ let with_connection fd f =
 (** [rpc request f] marshals the HTTP request represented by [request]
     and then parses the response. On success, [f] is called with an HTTP response record.
     On failure an exception is thrown. *)
-let rpc t request (f : Http.Response.t -> 'a) =
+let rpc t upgrade request (f : Http.Response.t -> 'a) : 'a =
   match t.conn with
-  | H1_conn conn -> Http1.do_request t conn request true f
+  | H1_conn conn -> Http1.do_request t conn request upgrade f
   | H2_conn conn -> Http2.do_request t conn request f

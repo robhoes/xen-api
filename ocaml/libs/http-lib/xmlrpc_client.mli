@@ -20,6 +20,8 @@ exception Connection_reset
     	and check the connection works fail. *)
 exception Stunnel_connection_failed
 
+exception Content_length_required
+
 module SSL : sig
   (** A desired SSL configuration *)
   type t

@@ -379,11 +379,18 @@ let with_http request f s =
   try Http_client.rpc s request (fun response s -> f (response, s))
   with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
 
-let with_http2 request f conn =
-  try Http_client2.rpc conn request f
+let with_http2_fd request f s =
+  try
+    Http_client2.with_connection s (fun conn ->
+        Http_client2.rpc conn false request f
+    )
   with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
 
-let curry2 f (a, b) = f a b
+let with_http2 request f conn =
+  try Http_client2.rpc conn true request f
+  with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
+
+exception Content_length_required
 
 module type FORMAT = sig
   type response
@@ -460,6 +467,13 @@ functor
             F.response_of_file_descr s
       with Unix.Unix_error (Unix.ECONNRESET, _, _) -> raise Connection_reset
 
+    let response_body response =
+      match response.Http.Response.body with
+      | None ->
+          raise Content_length_required
+      | Some b ->
+          F.response_of_string b
+
     let rpc ?(srcstr = "unset") ?(dststr = "unset") ~transport ~http req =
       (* Caution: req can contain sensitive information such as passwords in its parameters,
          		 * so we should not log the parameters or a string representation of the whole thing.
@@ -467,8 +481,8 @@ functor
       E.debug "%s=>%s [label=\"%s\"];" srcstr dststr
         (F.request_to_short_string req) ;
       let body = F.request_to_string req in
-      let http = {http with Http.Request.body= Some body} in
-      with_transport transport (with_http http (curry2 read_response))
+      let request = {http with Http.Request.body= Some body} in
+      with_transport transport (with_http2_fd request response_body)
   end
 
 module XML_protocol = Protocol (XML)
