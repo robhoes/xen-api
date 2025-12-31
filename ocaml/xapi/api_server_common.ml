@@ -152,6 +152,7 @@ let forward req call is_json =
       , !Constants.https_port
       )
   in
+  D.debug "FORWARDING %s" (Rpc.string_of_call call) ;
   let rpc =
     if is_json then
       JSONRPC_protocol.rpc
@@ -159,7 +160,7 @@ let forward req call is_json =
       XMLRPC_protocol.rpc
   in
   rpc ~srcstr:"xapi" ~dststr:"xapi" ~transport
-    ~http:{req with Http.Request.frame= true}
+    ~http:{req with Http.Request.frame= false}
     call
 
 (* Whitelist of functions that do *not* get forwarded to the master (e.g. session.login_with_password) *)

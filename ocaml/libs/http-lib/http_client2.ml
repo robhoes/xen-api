@@ -217,7 +217,9 @@ module Http2 = struct
     Body.Writer.close request_body ;
 
     debug "waiting for response......" ;
-    Event.receive ch |> Event.sync
+    let response = Event.receive ch |> Event.sync in
+    debug "returning response" ;
+    response
 
   let upgrade_hander t request callback =
     let { conn=(H1_conn {Httpun_unix.Client.runtime; _} | H2_conn {H2_unix.Client.runtime; _}) } = t in
@@ -355,7 +357,9 @@ module Http1 = struct
     Body.Writer.close request_body ;
 
     debug "waiting for response......" ;
-    Event.receive ch |> Event.sync
+    let response = Event.receive ch |> Event.sync in
+    debug "returning response" ;
+    response
 end
 
 let connect fd : t =

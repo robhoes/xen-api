@@ -187,12 +187,15 @@ module IO_loop = struct
       let rec write_loop_step () =
         match Runtime.next_write_operation t with
         | `Write io_vectors ->
+            debug "write request" ;
             let write_result = writev socket io_vectors in
             Runtime.report_write_result t write_result ;
             write_loop_step ()
         | `Yield ->
+            debug "write yield" ;
             Runtime.yield_writer t write_loop
         | `Close _ ->
+            debug "write close" ;
             write_closed := true ;
             shutdown socket Unix.SHUTDOWN_SEND
       in
@@ -203,6 +206,7 @@ module IO_loop = struct
           debug "%s" (Printexc.to_string exn) ;
           Runtime.report_exn t exn
     in
+    debug "IO loop" ;
     Runtime.yield_writer t write_loop ;
     let _ : Thread.t =
       Thread.create
