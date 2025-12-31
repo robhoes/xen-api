@@ -1,0 +1,27 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1609870929,
+        "narHash": "sha256-aVGF0O3T+Xg4avzyCWhkZG6DvqItK6u/1Y4yY7jnj80=",
+        "owner": "sternenseemann",
+        "repo": "nixpkgs",
+        "rev": "2de4f7dab09871fd05856ffde8f8e3bd40635579",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sternenseemann",
+        "ref": "ppx_deriving-5.1",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

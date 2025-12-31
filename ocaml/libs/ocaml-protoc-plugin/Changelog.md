@@ -1,0 +1,171 @@
+## 6.2.0: 2025-08-28
+- Fix potential nameclash for messages defining extensions
+- Resolve compilation warning on deprecated fields enclosed in a oneof
+- Improve how comments are copied to generated code
+- Add flag 'singleton\_oneof\_as\_option' to map single field
+  onofs to option type (default on). Set to 'false' to keep old
+  behaviour.
+- Improve copying of comments from .proto files into ocaml code using
+  omd to parse markdown
+- Fix problem with deserializing large singed integers (#45)
+- Compile json test stub with C++17 mode
+- Fix unrolled annotation
+
+## 6.1.0: 2024-04-25
+- Fix name resolution leading to wrongly mapped names
+- Fix codegen bug causing the plugin to reject valid protobuf
+- Add preliminary support for melange though disabling eager
+  evaluation of serialize and deserialize functions when not using
+  native or bytecode backends
+- Fix missing cflags when compiling test c stub
+- Make Map tests compatible with older versions of protoc
+- Fix negative integer test failues due to a bug in older versions of protobuf (google) c lib
+
+## 6.0.0: 2024-04-13
+
+### New features
+- [x] Implement json serialization and deserialization (#5)
+- [x] Support special json mapping for google types (#9)
+- [x] Add deprecation annotations for deprecated fields, services etc (#8)
+- [x] Add option to prefix generated files with their package name
+- [x] Copy documentation from proto files into generated ocaml bindings
+
+### Bug fixes
+- [x] Fix file output name if files contains a '-'
+- [x] Resolve bug for Request/Response module aliases leading to
+generating uncompilable code. (#21)
+- [x] Fix codegen bug for messages without fields and setting
+singleton_records = true (#20)
+- [x] In Services, the package field is now correctly set to None if
+      the service if not defined in a package scope (#24)
+
+### Misc changes
+- [x] Unify serialization and deserialization spec and optimize oneof
+      handling
+- [x] Simplify types used in code generation to improve readaility
+- [x] *Replace `val name': unit -> string` with `val name: unit ->
+string` which will only return the full protobuf name
+- [x] Optimize merge functions by applying eager evaluation
+- [x] Change signature of `to_proto'` to return unit and not a writer
+
+(`*` indicates breaking change)
+
+### Notes
+  `Message.name': unit -> string` has been renamed to `Message.name:
+  unit -> string`, and is now contains the fully qualified protobuf
+  message name. Before the name was the ocaml module name of the
+  message.
+
+  `Service.Message` signature has been deprecated and replaced with
+  `Spec.Message` signature. `Service.Message` is now an alias for
+  `Spec.Message` and will be removed in future releases.
+
+## 5.0.0: 2024-02-24
+- [x] Fix service signature to be backward compatible
+- [x] Create detatched fork for active development of
+      ocaml-protoc-plugin. Thanks to @issuu for supporting initial
+      development!
+- [x] Merge messages when receiving multiple messages for the same
+      (single) field per protobuf spec.
+- [x] Add multiple buffer allocation strategies when serializing data
+- [x] Sort fields in output as recommended in protobuf spec and
+      implement fast deserialization when all fields are sorted.
+- [x] Optimize serialization and deserialization resulting in ~5x
+      speed improvments and is now on par with ocaml-protoc.
+- [x] Improve handling of extensions and remove unused extensions
+      argument for messages that do not carry extensions (Breaking change)
+- [x] Add benchmarks based on bechamel for optimization and comparing
+      performance against ocaml-protoc
+- [x] Fix upper case handling in name mangling and apply name mangling
+      for serivce records (thanks @crackcomm)
+- [x] Fix bug in name resolution leading to uncompilable code
+
+## 4.5.0: 2023-06-16
+- [x] Add more fields in generated service structs to make it easier
+      to extract service endpoint names for gRPC (#50)
+- [x] Remove buckescript packaging support (#45)
+
+## 4.4.0: 2023-03-13
+- [x] Emit modules for service endpoints with request/reply and gRPC
+      endpoint name (thanks @Nymphium)
+- [x] Support importing from proto files with `-` in their name.
+
+## 4.3.1: 2022-09-12
+- [x] Fix serialization/deserialization on big endian architectures
+- [x] Update tests for proto3 optional fields
+- [x] Remove dependency on dune-configurator
+
+
+## 4.3.0: 2022-09-09
+- [x] Use pkg-config to locate google well known types (thanks @vprevosto)
+- [x] Support proto3 optional fields
+- [x] Map proto3 optional fields into option types
+
+## 4.2.0: 2021-01-31
+- [x] Do not serialize field values when the same as the default
+      attribute.
+- [x] Fix bug when uint32/64 where values are converted to negative
+      integers if high bit is set.
+- [x] Fix bug which prevented specification of multiple opens (thanks @rauanmayemir)
+
+## 4.1.0: 2020-10-31
+- [x] Fix bug with Proto2 default integer arguments for Int32 and
+      Int64 types
+- [x] Add function to construct messages with default values
+- [x] Add missing includes for google well known types
+
+## 4.0.0: 2020-05-10
+- [x] Move userdefined opens to beginning of autogenerated files, to
+      allow using new google types
+- [*] Wrap google types (protofiles using googles well known types
+      will need to add `open=Google_types` to the list of compilation options
+- [x] Disable warning 33 (unused opens) for user provided opens
+
+## 3.0.0: 2020-01-06
+- [x] Add custom option to mangle names (modules, fields and enums) to
+      more Ocaml idiomatic names (snake_cased)
+- [x] Change type of deserialize error type to be an lower bound polymorphic variant
+- [x] Rewrite type mapping to ensure that no name clashes can exist.
+- [x] Fix bug in nested cursive types referencing wrong types
+- [x] Add custom options, so options to ocaml\_protoc\_plugin can be
+      embedded in .proto files
+- [x] Support extensions
+- [x] Allow use of message name Ocaml\_protoc\_plugin
+- [x] `*`Do not treat oneof fields as required, adding a `not_set variant
+      to all oneofs.
+- [x] Avoid name clash with imported .proto files
+- [x] Avoid eager evaluation of members of recursivbe modules to fix
+      bug triggered in bucklescript - @wokalski
+
+## 2.0.0: 2019-10-20
+- [x] Add examples
+- [x] *Oneofs with only one element should not be a variant type
+- [x] Add test when including proto files which defines the same package
+- [x] Add google well know types (library `ocaml-protoc-plugin.google_types`).
+- [x] *Move module to ocaml-protoc-plugin
+- [x] Optimize deserialization of large nested structures
+- [x] Provide pretty_printers aka deriving_show for `Result.error` and `Field.t`
+- [x] Fix stack overflow when deserializing big nested structures
+- [x] *Add option to not wrap single field type in records
+- [x] Refactor type emitter to closely follow spec
+
+## 1.0.0: 2019-10-12
+- [x] Support enum aliasing
+- [x] Avoid name clash with on 'name'
+- [x] Fix code generation when argument contains a path
+- [x] Refactor internal types to make serialization and
+      deserialization type spec symmetrical.
+- [x] Optimize deserialization for messages with max_id < 1024
+- [x] Dont depend on Base in runtime
+- [x] Slim runtime dependencies: Remove need for base, ocplib-endian
+      and ppx_let
+- [x] Honour [packed=...] flag.
+- [x] Make fixed scalar types default to int32 and int64
+- [x] Support proto2 specification
+- [x] Add options to switch between int64|int32 and int
+- [x] Fix name clash problem with special enum names
+- [x] Refactor serializaton and deserialization to simplify emitted code
+- [x] Eagerly evaluate serialization (for speed).
+
+## 0.9: 2019-09-25
+- [x] Initial Release

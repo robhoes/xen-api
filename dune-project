@@ -924,3 +924,9 @@
  (depends
   (alcotest :with-test)
   (odoc :with-doc)))
+
+(package
+ (name grpc))
+
+(package
+ (name grpc-lwt))

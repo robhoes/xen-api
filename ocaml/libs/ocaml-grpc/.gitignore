@@ -1,0 +1,5 @@
+_build
+.merlin
+_opam
+/.direnv
+/result
