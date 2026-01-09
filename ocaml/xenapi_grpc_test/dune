@@ -1,0 +1,14 @@
+(executable
+  (name xenapi_grpc_test)
+  (libraries
+    gluten
+    grpc
+    grpc_unix
+    h2
+    httpun_unix   ; for h2_unix
+    ocaml-protoc-plugin
+    threads.posix
+    unix
+    xapi-log
+  )
+)
