@@ -11168,6 +11168,7 @@ let http_actions =
       )
     )
   ; ("put_bundle", (Put, Constants.put_bundle_uri, true, [], _R_POOL_OP, []))
+  ; ("grpc", (Post, "/grpc", false, [], _R_READ_ONLY, []))
   ]
 
 (* these public http actions will NOT be checked by RBAC *)
@@ -11193,6 +11194,7 @@ let public_http_actions_with_no_rbac_check =
   ; "post_jsonrpc"
   ; "post_jsonrpc_options"
   ; "get_pool_update_download"
+  ; "grpc"
   ]
 
 (* permissions not associated with any object message or field *)
