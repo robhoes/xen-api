@@ -114,6 +114,7 @@
    xapi_main
    server
    api_server
+   grpc_server
    xapi
    custom_actions
    context
@@ -245,11 +246,6 @@
   xxhash
   yojson
   zstd
-  ; experimental gRPC
-  grpc
-  grpc_unix
-  ocaml-protoc-plugin
-  xenapi_proto
  )
  (preprocess
   (per_module
@@ -298,7 +294,7 @@
  (name xapi_internal_server)
  (modes best)
  (wrapped false)
- (modules api_server xapi)
+ (modules api_server grpc_server xapi)
  (libraries
   clock
   forkexec
@@ -333,7 +329,13 @@
   xapi-consts.xapi_version
   xapi_cli_server
   xapi_database
-  xapi_internal))
+  xapi_internal
+  ; experimental gRPC
+  grpc
+  grpc_unix
+  ocaml-protoc-plugin
+  xenapi_proto
+  ))
 
 (executable
  (modes exe)

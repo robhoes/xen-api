@@ -319,6 +319,144 @@ end = struct
   let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
 end
 
+and Get_by_name_label_msg : sig
+  type t = {
+    session_id:string;
+    label:string;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?session_id:string -> ?label:string -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?session_id:string -> ?label:string -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Get_by_name_label_msg
+  let name () = ".get_by_name_label_msg"
+  type t = {
+    session_id:string;
+    label:string;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?session_id:string -> ?label:string -> unit -> t
+  let make ?(session_id = {||}) ?(label = {||}) () = { session_id; label }
+  let merge =
+  let merge_session_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ) in
+  let merge_label = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "label", "label"), string, ({||})) ) in
+  fun t1 t2 -> {
+  	session_id = (merge_session_id t1.session_id t2.session_id);
+  	label = (merge_label t1.label t2.label);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ^:: basic ((2, "label", "label"), string, ({||})) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer { session_id; label } -> serialize writer session_id label
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor session_id label = { session_id; label } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun { session_id; label } -> serialize session_id label
+  let from_json_exn =
+    let constructor session_id label = { session_id; label } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
+and Login_with_password_msg : sig
+  type t = {
+    uname:string;
+    pwd:string;
+    version:string;
+    originator:string;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?uname:string -> ?pwd:string -> ?version:string -> ?originator:string -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?uname:string -> ?pwd:string -> ?version:string -> ?originator:string -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Login_with_password_msg
+  let name () = ".login_with_password_msg"
+  type t = {
+    uname:string;
+    pwd:string;
+    version:string;
+    originator:string;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?uname:string -> ?pwd:string -> ?version:string -> ?originator:string -> unit -> t
+  let make ?(uname = {||}) ?(pwd = {||}) ?(version = {||}) ?(originator = {||}) () = { uname; pwd; version; originator }
+  let merge =
+  let merge_uname = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "uname", "uname"), string, ({||})) ) in
+  let merge_pwd = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "pwd", "pwd"), string, ({||})) ) in
+  let merge_version = Runtime'.Merge.merge Runtime'.Spec.( basic ((3, "version", "version"), string, ({||})) ) in
+  let merge_originator = Runtime'.Merge.merge Runtime'.Spec.( basic ((4, "originator", "originator"), string, ({||})) ) in
+  fun t1 t2 -> {
+  	uname = (merge_uname t1.uname t2.uname);
+  	pwd = (merge_pwd t1.pwd t2.pwd);
+  	version = (merge_version t1.version t2.version);
+  	originator = (merge_originator t1.originator t2.originator);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "uname", "uname"), string, ({||})) ^:: basic ((2, "pwd", "pwd"), string, ({||})) ^:: basic ((3, "version", "version"), string, ({||})) ^:: basic ((4, "originator", "originator"), string, ({||})) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer { uname; pwd; version; originator } -> serialize writer uname pwd version originator
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor uname pwd version originator = { uname; pwd; version; originator } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun { uname; pwd; version; originator } -> serialize uname pwd version originator
+  let from_json_exn =
+    let constructor uname pwd version originator = { uname; pwd; version; originator } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
 module Network_class = struct
   module Create = struct
     let package_name = None
@@ -331,6 +469,35 @@ module Network_class = struct
 
   let create =
     (module Network : Runtime'.Spec.Message with type t = Network.t ),
+    (module StringValue : Runtime'.Spec.Message with type t = StringValue.t )
+
+  module Get_by_name_label = struct
+    let package_name = None
+    let service_name = "Network_class"
+    let method_name = "get_by_name_label"
+    let name = "/Network_class/get_by_name_label"
+    module Request = Get_by_name_label_msg
+    module Response = StringValue
+  end
+
+  let get_by_name_label =
+    (module Get_by_name_label_msg : Runtime'.Spec.Message with type t = Get_by_name_label_msg.t ),
+    (module StringValue : Runtime'.Spec.Message with type t = StringValue.t )
+
+end
+
+module Session = struct
+  module Login_with_password = struct
+    let package_name = None
+    let service_name = "session"
+    let method_name = "login_with_password"
+    let name = "/session/login_with_password"
+    module Request = Login_with_password_msg
+    module Response = StringValue
+  end
+
+  let login_with_password =
+    (module Login_with_password_msg : Runtime'.Spec.Message with type t = Login_with_password_msg.t ),
     (module StringValue : Runtime'.Spec.Message with type t = StringValue.t )
 
 end
