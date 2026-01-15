@@ -1,5 +1,5 @@
-(executable
-  (name xenapi_grpc_test)
+(library
+  (name xenapi_proto)
   (libraries
     gluten
     grpc
@@ -10,6 +10,5 @@
     threads.posix
     unix
     xapi-log
-    xenapi_proto
   )
 )

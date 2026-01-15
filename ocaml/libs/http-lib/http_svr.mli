@@ -17,8 +17,10 @@
 (** A URI path used to index handlers *)
 type uri_path = string
 
+(* type reqd *)
+
 (** Request descriptor used to read from and respond to a request *)
-type reqd
+type reqd = H1_reqd of Httpun.Reqd.t | H2_reqd of H2.Reqd.t | No_reqd
 
 (** A handler is a function which takes a request and produces a response *)
 type handler = Http.Request.t -> Unix.file_descr -> reqd -> unit

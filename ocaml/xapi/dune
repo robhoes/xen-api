@@ -245,6 +245,11 @@
   xxhash
   yojson
   zstd
+  ; experimental gRPC
+  grpc
+  grpc_unix
+  ocaml-protoc-plugin
+  xenapi_proto
  )
  (preprocess
   (per_module

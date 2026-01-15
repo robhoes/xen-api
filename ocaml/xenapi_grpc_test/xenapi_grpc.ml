@@ -1,5 +1,5 @@
 open Grpc_unix
-open Xenapi
+open Xenapi_proto.Xenapi
 open Ocaml_protoc_plugin
 
 module D = Debug.Make (struct let name = "xenapi_grpc" end)
