@@ -29,33 +29,64 @@ end
 let req' = ref None
 let fd' = ref None
 
+module Custom = Api_server_common.Actions
+module Forward = Api_server_common.Forwarder
+
 module Session = struct
   let login_with_password (buffer : string) =
     debug "session.login_with_password" ;
     let decode, encode = Service.make_service_functions Session.login_with_password in
     (* Decode the request. *)
-    let login_with_password_msg =
       Reader.create buffer |> decode |> function
-      | Ok v -> v
+      | Ok login_with_password_msg ->
+          debug "session.login_with_password: received {uname=%s}"
+            login_with_password_msg.Login_with_password_msg.uname;
+          let http_req = Option.get !req' in
+          let fd = Option.get !fd' in
+          let __call = "session.login_with_password" in
+  
+          let __label = __call in
+          let (__sync_ty, __call) = Server_helpers.sync_ty_and_maybe_remove_prefix __call in
+
+          let subtask_of = if http_req.Http.Request.task <> None then
+            http_req.Http.Request.task else http_req.Http.Request.subtask_of in
+          let http_other_config = Context.get_http_other_config http_req in
+          let resp =
+            Server_helpers.exec_with_new_task ("dispatch:" ^ __call) ~http_other_config
+              ?subtask_of:(Option.map Ref.of_string subtask_of) @@ fun __context ->
+            Server_helpers.dispatch_exn_wrapper @@ fun () ->
+  
+            let uname = login_with_password_msg.Login_with_password_msg.uname in
+            let pwd = login_with_password_msg.Login_with_password_msg.pwd in
+            let version = login_with_password_msg.Login_with_password_msg.version in
+            let originator = login_with_password_msg.Login_with_password_msg.originator in
+  
+  
+            let rbac __context fn = fn () in
+            let marshaller = (fun x -> API.rpc_of_ref_session x) in
+            let local_op =
+              fun ~__context -> (rbac __context (fun () -> 
+                (Custom.Session.login_with_password ~__context:(Context.check_for_foreign_database ~__context)
+                  ~uname ~pwd ~version ~originator))) in
+            let supports_async = false in
+            let generate_task_for = true in
+            let forward_op =
+              fun ~local_fn ~__context -> (rbac __context (fun () ->
+                (Forward.Session.login_with_password ~__context:(Context.check_for_foreign_database ~__context)
+                  ~uname ~pwd ~version ~originator) )) in
+            let resp = Server_helpers.do_dispatch ~forward_op supports_async __call
+                        local_op marshaller fd http_req __label __sync_ty generate_task_for in
+            resp
+          in
+          let response =
+            match resp.Rpc.contents with
+            | Rpc.String s -> s
+            | _ -> "not_implemented"
+          in
+          Grpc.Status.(v OK), Some (response |> encode |> Writer.contents)
       | Error e ->
-          failwith
-            (Printf.sprintf "Could not decode request: %s" (Result.show_error e))
-    in
-    debug "session.login_with_password: received {uname=%s}" login_with_password_msg.Login_with_password_msg.uname;
-    
-    let call = Rpc.call "session.login_with_password" [
-      Rpc.String login_with_password_msg.Login_with_password_msg.uname;
-      Rpc.String login_with_password_msg.Login_with_password_msg.pwd;
-      Rpc.String login_with_password_msg.Login_with_password_msg.version;
-      Rpc.String login_with_password_msg.Login_with_password_msg.originator
-    ] in
-    let response = Api_server.Server.dispatch_call (Option.get !req') (Option.get !fd') call in
-    let response =
-      match response.Rpc.contents with
-      | Rpc.String s -> s
-      | _ -> "not_implemented"
-    in
-    (Grpc.Status.(v OK), Some (response |> encode |> Writer.contents))
+          error "Could not decode request: %s" (Result.show_error e) ;
+          Grpc.Status.(v Unknown), None
 end
 
 let xapi_network_service () =
