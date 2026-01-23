@@ -1,12 +1,14 @@
 module ServiceMap = Map.Make (String)
 
-type service = H2.Reqd.t -> unit
-type t = service ServiceMap.t
+type 'a context = 'a
+
+type 'a service = H2.Reqd.t -> 'a context -> unit
+type 'a t = 'a service ServiceMap.t
 
 let v () = ServiceMap.empty
 let add_service ~name ~service t = ServiceMap.add name service t
 
-let handle_request t reqd =
+let handle_request t reqd context =
   let request = H2.Reqd.request reqd in
   let respond_with code =
     H2.Reqd.respond_with_string reqd (H2.Response.create code) ""
@@ -18,7 +20,7 @@ let handle_request t reqd =
       let service_name = List.nth parts (List.length parts - 2) in
       let service = ServiceMap.find_opt service_name t in
       match service with
-      | Some service -> service reqd
+      | Some service -> service reqd context
       | None -> respond_with `Not_found
     else respond_with `Not_found
   in
@@ -45,20 +47,20 @@ let handle_request t reqd =
   | _ -> respond_with `Not_found
 
 module Rpc = struct
-  type unary = string -> Grpc.Status.t * string option
-  type client_streaming = string Seq.t -> Grpc.Status.t * string option
-  type server_streaming = string -> (string -> unit) -> Grpc.Status.t
+  type 'a unary = string -> 'a context -> Grpc.Status.t * string option
+  type 'a client_streaming = string Seq.t -> 'a context -> Grpc.Status.t * string option
+  type 'a server_streaming = string -> (string -> unit) -> 'a context -> Grpc.Status.t
 
-  type bidirectional_streaming =
-    string Seq.t -> (string -> unit) -> Grpc.Status.t
+  type 'a bidirectional_streaming =
+    string Seq.t -> (string -> unit) -> 'a context -> Grpc.Status.t
 
-  type t =
-    | Unary of unary
-    | Client_streaming of client_streaming
-    | Server_streaming of server_streaming
-    | Bidirectional_streaming of bidirectional_streaming
+  type 'a t =
+    | Unary of 'a unary
+    | Client_streaming of 'a client_streaming
+    | Server_streaming of 'a server_streaming
+    | Bidirectional_streaming of 'a bidirectional_streaming
 
-  let bidirectional_streaming ~f reqd =
+  let bidirectional_streaming ~f reqd context =
     let body = H2.Reqd.request_body reqd in
     let request_reader, request_writer = Seq.create_reader_writer () in
     let response_reader, response_writer = Seq.create_reader_writer () in
@@ -67,7 +69,7 @@ module Rpc = struct
     let th = Thread.create
       (fun () ->
         let respond = Seq.write response_writer in
-        let status = f request_reader respond in
+        let status = f request_reader respond context in
         Seq.close_writer response_writer;
         Event.(send status_ch status |> sync)) ()
     in
@@ -78,24 +80,24 @@ module Rpc = struct
       ) ;
     Thread.join th
 
-  let client_streaming ~f reqd =
-    bidirectional_streaming reqd ~f:(fun requests respond ->
-        let status, response = f requests in
+  let client_streaming ~f reqd context =
+    bidirectional_streaming reqd context ~f:(fun requests respond context ->
+        let status, response = f requests context in
         (match response with None -> () | Some response -> respond response);
         status)
 
-  let server_streaming ~f reqd =
-    bidirectional_streaming reqd ~f:(fun requests respond ->
+  let server_streaming ~f reqd context =
+    bidirectional_streaming reqd context ~f:(fun requests respond context ->
         match Seq.read_and_exhaust requests with
         | None -> Grpc.Status.(v OK)
-        | Some request -> f request respond)
+        | Some request -> f request respond context)
 
-  let unary ~f reqd =
-    bidirectional_streaming reqd ~f:(fun requests respond ->
+  let unary ~f reqd context =
+    bidirectional_streaming reqd context ~f:(fun requests respond context ->
         match Seq.read_and_exhaust requests with
         | None -> Grpc.Status.(v OK)
         | Some request ->
-            let status, response = f request in
+            let status, response = f request context in
             (match response with
             | None -> ()
             | Some response -> respond response);
@@ -105,12 +107,12 @@ end
 module Service = struct
   module RpcMap = Map.Make (String)
 
-  type t = Rpc.t RpcMap.t
+  type 'a t = 'a Rpc.t RpcMap.t
 
   let v () = RpcMap.empty
   let add_rpc ~name ~rpc t = RpcMap.add name rpc t
 
-  let handle_request (t : t) reqd =
+  let handle_request (t : 'a t) reqd context =
     let request = H2.Reqd.request reqd in
     let respond_with code =
       H2.Reqd.respond_with_string reqd (H2.Response.create code) ""
@@ -122,10 +124,10 @@ module Service = struct
       match rpc with
       | Some rpc -> (
           match rpc with
-          | Unary f -> Rpc.unary ~f reqd
-          | Client_streaming f -> Rpc.client_streaming ~f reqd
-          | Server_streaming f -> Rpc.server_streaming ~f reqd
-          | Bidirectional_streaming f -> Rpc.bidirectional_streaming ~f reqd)
+          | Unary f -> Rpc.unary ~f reqd context
+          | Client_streaming f -> Rpc.client_streaming ~f reqd context
+          | Server_streaming f -> Rpc.server_streaming ~f reqd context
+          | Bidirectional_streaming f -> Rpc.bidirectional_streaming ~f reqd context)
       | None -> respond_with `Not_found
     else respond_with `Not_found
 end

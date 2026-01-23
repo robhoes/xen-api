@@ -9,7 +9,7 @@ open D
 let grpc_server = ref None
 
 module Network = struct
-  let create (buffer : string) =
+  let create (buffer : string) _context =
     debug "network.create" ;
     let decode, encode = Service.make_service_functions Network_class.create in
     (* Decode the request. *)
@@ -26,14 +26,11 @@ module Network = struct
     (Grpc.Status.(v OK), Some (r |> encode |> Writer.contents))
 end
 
-let req' = ref None
-let fd' = ref None
-
 module Custom = Api_server_common.Actions
 module Forward = Api_server_common.Forwarder
 
 module Session = struct
-  let login_with_password (buffer : string) =
+  let login_with_password (buffer : string) (http_req, fd) =
     debug "session.login_with_password" ;
     let decode, encode = Service.make_service_functions Session.login_with_password in
     (* Decode the request. *)
@@ -41,8 +38,6 @@ module Session = struct
       | Ok login_with_password_msg ->
           debug "session.login_with_password: received {uname=%s}"
             login_with_password_msg.Login_with_password_msg.uname;
-          let http_req = Option.get !req' in
-          let fd = Option.get !fd' in
           let __call = "session.login_with_password" in
   
           let __label = __call in
@@ -93,7 +88,7 @@ let xapi_network_service () =
   Server.Service.(
     v () |> add_rpc ~name:"create" ~rpc:(Unary Network.create) |> handle_request)
     
-let session_service () =
+let session_service () = (* H2.Reqd.t -> 'a -> unit *)
   Server.Service.(
     v () |> add_rpc ~name:"login_with_password" ~rpc:(Unary Session.login_with_password) |> handle_request)
 
@@ -112,11 +107,10 @@ let get_server () =
 
 let handler req fd reqd =
   debug "Entering gRPC handler" ;
-  req' := Some req ;
-  fd' := Some fd ;
+  let context = (req, fd) in
   match reqd with
   | Http_svr.H2_reqd reqd ->
-      let _ = Thread.create (fun () -> Grpc_unix.Server.handle_request (get_server ()) reqd) () in
+      let _ = Thread.create (fun () -> Grpc_unix.Server.handle_request (get_server ()) reqd context) () in
       ()
   | Http_svr.H1_reqd _ | Http_svr.No_reqd ->
       failwith "gRPC requires HTTP/2"
