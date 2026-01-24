@@ -457,6 +457,116 @@ end = struct
   let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
 end
 
+and Event_stream_msg : sig
+  type t = (string) [@@deriving show { with_path = false }, eq]
+  val make: ?session_id:string -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?session_id:string -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Event_stream_msg
+  let name () = ".event_stream_msg"
+  type t = (string) [@@deriving show { with_path = false }, eq]
+  type make_t = ?session_id:string -> unit -> t
+  let make ?(session_id = {||}) () = (session_id)
+  let merge =
+  let merge_session_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ) in
+  fun (t1_session_id) (t2_session_id) -> merge_session_id t1_session_id t2_session_id
+  let spec () = Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer (session_id) -> serialize writer session_id
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor session_id = (session_id) in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun (session_id) -> serialize session_id
+  let from_json_exn =
+    let constructor session_id = (session_id) in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
+and Event_record : sig
+  type t = (int) [@@deriving show { with_path = false }, eq]
+  val make: ?id:int -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?id:int -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Event_record
+  let name () = ".event_record"
+  type t = (int) [@@deriving show { with_path = false }, eq]
+  type make_t = ?id:int -> unit -> t
+  let make ?(id = 0) () = (id)
+  let merge =
+  let merge_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "id", "id"), int64_int, (0)) ) in
+  fun (t1_id) (t2_id) -> merge_id t1_id t2_id
+  let spec () = Runtime'.Spec.( basic ((1, "id", "id"), int64_int, (0)) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer (id) -> serialize writer id
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor id = (id) in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun (id) -> serialize id
+  let from_json_exn =
+    let constructor id = (id) in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
 module Network_class = struct
   module Create = struct
     let package_name = None
@@ -499,6 +609,22 @@ module Session = struct
   let login_with_password =
     (module Login_with_password_msg : Runtime'.Spec.Message with type t = Login_with_password_msg.t ),
     (module StringValue : Runtime'.Spec.Message with type t = StringValue.t )
+
+end
+
+module Event = struct
+  module Stream = struct
+    let package_name = None
+    let service_name = "event"
+    let method_name = "stream"
+    let name = "/event/stream"
+    module Request = Event_stream_msg
+    module Response = Event_record
+  end
+
+  let stream =
+    (module Event_stream_msg : Runtime'.Spec.Message with type t = Event_stream_msg.t ),
+    (module Event_record : Runtime'.Spec.Message with type t = Event_record.t )
 
 end
 

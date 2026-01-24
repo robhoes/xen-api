@@ -84,6 +84,24 @@ module Session = struct
           Grpc.Status.(v Unknown), None
 end
 
+module Event = struct
+  let stream (buffer : string) f _context =
+    debug "event.stream" ;
+    let decode, encode = Service.make_service_functions Event.stream in
+    (* Decode the request. *)
+    Reader.create buffer |> decode |> function
+    | Ok msg ->
+        encode 1 |> Writer.contents |> f ;
+        encode 2 |> Writer.contents |> f ;
+        encode 3 |> Writer.contents |> f ;
+        encode 4 |> Writer.contents |> f ;
+        encode 5 |> Writer.contents |> f ;
+        Grpc.Status.(v OK)
+    | Error e ->
+        error "Could not decode request: %s" (Result.show_error e) ;
+        Grpc.Status.(v Unknown)
+end
+
 let xapi_network_service () =
   Server.Service.(
     v () |> add_rpc ~name:"create" ~rpc:(Unary Network.create) |> handle_request)
@@ -92,6 +110,10 @@ let session_service () = (* H2.Reqd.t -> 'a -> unit *)
   Server.Service.(
     v () |> add_rpc ~name:"login_with_password" ~rpc:(Unary Session.login_with_password) |> handle_request)
 
+let event_service () =
+  Server.Service.(
+    v () |> add_rpc ~name:"stream" ~rpc:(Server_streaming Event.stream) |> handle_request)
+
 let get_server () =
   match !grpc_server with
   | None ->
@@ -99,7 +121,8 @@ let get_server () =
       Server.(
         v ()
         |> add_service ~name:"network" ~service:(xapi_network_service ())
-        |> add_service ~name:"session" ~service:(session_service ()))
+        |> add_service ~name:"session" ~service:(session_service ())
+        |> add_service ~name:"event" ~service:(event_service ()))
     in
     grpc_server := Some server ;
     server
