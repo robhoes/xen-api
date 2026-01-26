@@ -84,6 +84,52 @@ module Session = struct
           Grpc.Status.(v Unknown), None
 end
 
+module Host = struct
+  let get_all (buffer : string) (http_req, fd) =
+    debug "host.get_all" ;
+    let decode, encode = Service.make_service_functions Host.get_all in
+    (* Decode the request. *)
+      Reader.create buffer |> decode |> function
+      | Ok msg ->
+          let __call = "host.get_all" in
+  
+          let __label = __call in
+          let (__sync_ty, __call) = Server_helpers.sync_ty_and_maybe_remove_prefix __call in
+
+          let subtask_of = if http_req.Http.Request.task <> None then
+            http_req.Http.Request.task else http_req.Http.Request.subtask_of in
+          let http_other_config = Context.get_http_other_config http_req in
+          let resp =
+            Server_helpers.exec_with_new_task ("dispatch:" ^ __call) ~http_other_config
+              ?subtask_of:(Option.map Ref.of_string subtask_of) @@ fun __context ->
+            Server_helpers.dispatch_exn_wrapper @@ fun () ->
+  
+            let session_id = Ref.of_secret_string msg in
+            let session_id_rpc = Rpc.String msg in
+
+            Session_check.check ~intra_pool_only:false ~session_id ~action:"host.get_all";
+            let arg_names_values = [("session_id", session_id_rpc)] in
+            let key_names = [] in
+            let rbac __context fn = Rbac.check session_id __call ~args:arg_names_values ~keys:key_names ~__context ~fn in
+            let marshaller = (fun x -> API.rpc_of_ref_host_set x) in
+            let local_op = fun ~__context ->(rbac __context (fun()->(Db_actions.DB_Action.Host.get_all ~__context:(Context.check_for_foreign_database ~__context) ))) in
+            let supports_async = false in
+            let generate_task_for = true in
+            let resp = Server_helpers.do_dispatch ~session_id  supports_async __call local_op marshaller fd http_req __label __sync_ty generate_task_for in
+            resp
+
+          in
+          let response = 
+            match resp.Rpc.contents with
+            | Rpc.Enum t -> List.map Rpc.string_of_rpc t
+            | _ -> failwith "not_implemented"
+          in
+          Grpc.Status.(v OK), Some (response |> encode |> Writer.contents)
+      | Error e ->
+          error "Could not decode request: %s" (Result.show_error e) ;
+          Grpc.Status.(v Unknown), None
+end
+
 module Event = struct
   let stream (buffer : string) f _context =
     debug "event.stream" ;
@@ -114,6 +160,10 @@ let event_service () =
   Server.Service.(
     v () |> add_rpc ~name:"stream" ~rpc:(Server_streaming Event.stream) |> handle_request)
 
+let host_service () =
+  Server.Service.(
+    v () |> add_rpc ~name:"get_all" ~rpc:(Unary Host.get_all) |> handle_request)
+
 let get_server () =
   match !grpc_server with
   | None ->
@@ -122,7 +172,8 @@ let get_server () =
         v ()
         |> add_service ~name:"network" ~service:(xapi_network_service ())
         |> add_service ~name:"session" ~service:(session_service ())
-        |> add_service ~name:"event" ~service:(event_service ()))
+        |> add_service ~name:"event" ~service:(event_service ())
+        |> add_service ~name:"host" ~service:(host_service ()))
     in
     grpc_server := Some server ;
     server
