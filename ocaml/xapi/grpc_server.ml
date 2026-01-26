@@ -131,17 +131,59 @@ module Host = struct
 end
 
 module Event = struct
-  let stream (buffer : string) f _context =
+  let from_inner http_req fd session_id token =
+    let __call = "event.from" in
+
+    let __label = __call in
+    let (__sync_ty, __call) = Server_helpers.sync_ty_and_maybe_remove_prefix __call in
+
+    let subtask_of = if http_req.Http.Request.task <> None then
+      http_req.Http.Request.task else http_req.Http.Request.subtask_of in
+    let http_other_config = Context.get_http_other_config http_req in
+
+    Server_helpers.exec_with_new_task ("dispatch:" ^ __call) ~http_other_config
+      ?subtask_of:(Option.map Ref.of_string subtask_of) @@ fun __context ->
+    Server_helpers.dispatch_exn_wrapper @@ fun () ->
+
+    let classes = ["VM"] in
+    let timeout = 10. in
+    let session_id_rpc = Rpc.String (Ref.string_of session_id) in
+    let classes_rpc = Rpc.Enum [Rpc.String "VM"] in
+    let token_rpc = Rpc.String token in
+    let timeout_rpc = Rpc.Float timeout in
+
+    Session_check.check ~intra_pool_only:false ~session_id ~action:"event.from";
+    let arg_names_values = [("session_id", session_id_rpc); ("classes", classes_rpc); ("token", token_rpc); ("timeout", timeout_rpc)] in
+    let key_names = [] in
+    let rbac __context fn = Rbac.check session_id __call ~args:arg_names_values ~keys:key_names ~__context ~fn in
+    let marshaller = (fun x -> x) in
+    let local_op = fun ~__context ->(rbac __context (fun()->(Custom.Event.from ~__context:(Context.check_for_foreign_database ~__context)  ~classes ~token ~timeout))) in
+    let supports_async = false in
+    let generate_task_for = false in
+    let forward_op = fun ~local_fn ~__context -> (rbac __context (fun()-> (Forward.Event.from ~__context:(Context.check_for_foreign_database ~__context)  ~classes ~token ~timeout) )) in
+    Server_helpers.do_dispatch ~session_id ~forward_op supports_async __call local_op marshaller fd http_req __label __sync_ty generate_task_for
+
+  let stream (buffer : string) f (http_req, fd) =
     debug "event.stream" ;
     let decode, encode = Service.make_service_functions Event.stream in
     (* Decode the request. *)
     Reader.create buffer |> decode |> function
-    | Ok msg ->
-        encode 1 |> Writer.contents |> f ;
-        encode 2 |> Writer.contents |> f ;
-        encode 3 |> Writer.contents |> f ;
-        encode 4 |> Writer.contents |> f ;
-        encode 5 |> Writer.contents |> f ;
+    | Ok session_id ->
+        let session_id' = Ref.of_secret_string session_id in
+        let rec loop token =
+          let resp = from_inner http_req fd session_id' token in
+          let events, token = match resp.Rpc.contents with
+              | Rpc.Dict ["events", Rpc.Enum x; _; "token", Rpc.String token] ->
+                  List.length x, token
+              | _ -> 0, ""
+          in
+          debug "event count = %d, token = %s" events token ;
+          if events > 0 then
+            encode events |> Writer.contents |> f ;
+          if token <> "" then
+            loop token
+        in
+        let () = loop "" in
         Grpc.Status.(v OK)
     | Error e ->
         error "Could not decode request: %s" (Result.show_error e) ;
