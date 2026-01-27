@@ -458,8 +458,11 @@ end = struct
 end
 
 and Event_stream_msg : sig
-  type t = (string) [@@deriving show { with_path = false }, eq]
-  val make: ?session_id:string -> unit -> t
+  type t = {
+    session_id:string;
+    classes:string list;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?session_id:string -> ?classes:string list -> unit -> t
   (** Helper function to generate a message using default values *)
 
   val to_proto: t -> Runtime'.Writer.t
@@ -478,7 +481,7 @@ and Event_stream_msg : sig
   (** Fully qualified protobuf name of this message *)
 
   (**/**)
-  type make_t = ?session_id:string -> unit -> t
+  type make_t = ?session_id:string -> ?classes:string list -> unit -> t
   val merge: t -> t -> t
   val to_proto': Runtime'.Writer.t -> t -> unit
   val from_proto_exn: Runtime'.Reader.t -> t
@@ -487,27 +490,168 @@ and Event_stream_msg : sig
 end = struct
   module This'_ = Event_stream_msg
   let name () = ".event_stream_msg"
-  type t = (string) [@@deriving show { with_path = false }, eq]
-  type make_t = ?session_id:string -> unit -> t
-  let make ?(session_id = {||}) () = (session_id)
+  type t = {
+    session_id:string;
+    classes:string list;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?session_id:string -> ?classes:string list -> unit -> t
+  let make ?(session_id = {||}) ?(classes = []) () = { session_id; classes }
   let merge =
   let merge_session_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ) in
-  fun (t1_session_id) (t2_session_id) -> merge_session_id t1_session_id t2_session_id
-  let spec () = Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ^:: nil )
+  let merge_classes = Runtime'.Merge.merge Runtime'.Spec.( repeated ((2, "classes", "classes"), string, not_packed) ) in
+  fun t1 t2 -> {
+  	session_id = (merge_session_id t1.session_id t2.session_id);
+  	classes = (merge_classes t1.classes t2.classes);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "session_id", "sessionId"), string, ({||})) ^:: repeated ((2, "classes", "classes"), string, not_packed) ^:: nil )
   let to_proto' =
     let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
-    fun writer (session_id) -> serialize writer session_id
+    fun writer { session_id; classes } -> serialize writer session_id classes
 
   let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
   let from_proto_exn =
-    let constructor session_id = (session_id) in
+    let constructor session_id classes = { session_id; classes } in
     Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
   let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
   let to_json options =
     let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
-    fun (session_id) -> serialize session_id
+    fun { session_id; classes } -> serialize session_id classes
   let from_json_exn =
-    let constructor session_id = (session_id) in
+    let constructor session_id classes = { session_id; classes } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
+and Vm_record : sig
+  type t = {
+    uuid:string;
+    name_label:string;
+    power_state:string;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?uuid:string -> ?name_label:string -> ?power_state:string -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?uuid:string -> ?name_label:string -> ?power_state:string -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Vm_record
+  let name () = ".vm_record"
+  type t = {
+    uuid:string;
+    name_label:string;
+    power_state:string;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?uuid:string -> ?name_label:string -> ?power_state:string -> unit -> t
+  let make ?(uuid = {||}) ?(name_label = {||}) ?(power_state = {||}) () = { uuid; name_label; power_state }
+  let merge =
+  let merge_uuid = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "uuid", "uuid"), string, ({||})) ) in
+  let merge_name_label = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "name_label", "nameLabel"), string, ({||})) ) in
+  let merge_power_state = Runtime'.Merge.merge Runtime'.Spec.( basic ((3, "power_state", "powerState"), string, ({||})) ) in
+  fun t1 t2 -> {
+  	uuid = (merge_uuid t1.uuid t2.uuid);
+  	name_label = (merge_name_label t1.name_label t2.name_label);
+  	power_state = (merge_power_state t1.power_state t2.power_state);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "uuid", "uuid"), string, ({||})) ^:: basic ((2, "name_label", "nameLabel"), string, ({||})) ^:: basic ((3, "power_state", "powerState"), string, ({||})) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer { uuid; name_label; power_state } -> serialize writer uuid name_label power_state
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor uuid name_label power_state = { uuid; name_label; power_state } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun { uuid; name_label; power_state } -> serialize uuid name_label power_state
+  let from_json_exn =
+    let constructor uuid name_label power_state = { uuid; name_label; power_state } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
+  let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
+end
+
+and Host_record : sig
+  type t = {
+    uuid:string;
+    name_label:string;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?uuid:string -> ?name_label:string -> unit -> t
+  (** Helper function to generate a message using default values *)
+
+  val to_proto: t -> Runtime'.Writer.t
+  (** Serialize the message to binary format *)
+
+  val from_proto: Runtime'.Reader.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from binary format *)
+
+  val to_json: Runtime'.Json_options.t -> t -> Runtime'.Json.t
+  (** Serialize to Json (compatible with Yojson.Basic.t) *)
+
+  val from_json: Runtime'.Json.t -> (t, [> Runtime'.Result.error]) result
+  (** Deserialize from Json (compatible with Yojson.Basic.t) *)
+
+  val name: unit -> string
+  (** Fully qualified protobuf name of this message *)
+
+  (**/**)
+  type make_t = ?uuid:string -> ?name_label:string -> unit -> t
+  val merge: t -> t -> t
+  val to_proto': Runtime'.Writer.t -> t -> unit
+  val from_proto_exn: Runtime'.Reader.t -> t
+  val from_json_exn: Runtime'.Json.t -> t
+  (**/**)
+end = struct
+  module This'_ = Host_record
+  let name () = ".host_record"
+  type t = {
+    uuid:string;
+    name_label:string;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?uuid:string -> ?name_label:string -> unit -> t
+  let make ?(uuid = {||}) ?(name_label = {||}) () = { uuid; name_label }
+  let merge =
+  let merge_uuid = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "uuid", "uuid"), string, ({||})) ) in
+  let merge_name_label = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "name_label", "nameLabel"), string, ({||})) ) in
+  fun t1 t2 -> {
+  	uuid = (merge_uuid t1.uuid t2.uuid);
+  	name_label = (merge_name_label t1.name_label t2.name_label);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "uuid", "uuid"), string, ({||})) ^:: basic ((2, "name_label", "nameLabel"), string, ({||})) ^:: nil )
+  let to_proto' =
+    let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
+    fun writer { uuid; name_label } -> serialize writer uuid name_label
+
+  let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
+  let from_proto_exn =
+    let constructor uuid name_label = { uuid; name_label } in
+    Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
+  let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
+  let to_json options =
+    let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
+    fun { uuid; name_label } -> serialize uuid name_label
+  let from_json_exn =
+    let constructor uuid name_label = { uuid; name_label } in
     Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
   let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
 end
@@ -518,9 +662,9 @@ and Event_record : sig
     ty:string;
     op:string;
     reference:string;
-    snapshot:string option;
+    snapshot:[ `not_set | `Vm of Vm_record.t | `Host of Host_record.t ];
   } [@@deriving show { with_path = false }, eq]
-  val make: ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
+  val make: ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:[ `not_set | `Vm of Vm_record.t | `Host of Host_record.t ] -> unit -> t
   (** Helper function to generate a message using default values *)
 
   val to_proto: t -> Runtime'.Writer.t
@@ -539,7 +683,7 @@ and Event_record : sig
   (** Fully qualified protobuf name of this message *)
 
   (**/**)
-  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
+  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:[ `not_set | `Vm of Vm_record.t | `Host of Host_record.t ] -> unit -> t
   val merge: t -> t -> t
   val to_proto': Runtime'.Writer.t -> t -> unit
   val from_proto_exn: Runtime'.Reader.t -> t
@@ -553,24 +697,29 @@ end = struct
     ty:string;
     op:string;
     reference:string;
-    snapshot:string option;
+    snapshot:[ `not_set | `Vm of Vm_record.t | `Host of Host_record.t ];
   } [@@deriving show { with_path = false }, eq]
-  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
-  let make ?(id = {||}) ?(ty = {||}) ?(op = {||}) ?(reference = {||}) ?snapshot () = { id; ty; op; reference; snapshot }
+  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:[ `not_set | `Vm of Vm_record.t | `Host of Host_record.t ] -> unit -> t
+  let make ?(id = {||}) ?(ty = {||}) ?(op = {||}) ?(reference = {||}) ?(snapshot = `not_set) () = { id; ty; op; reference; snapshot }
   let merge =
   let merge_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "id", "id"), string, ({||})) ) in
   let merge_ty = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "ty", "ty"), string, ({||})) ) in
   let merge_op = Runtime'.Merge.merge Runtime'.Spec.( basic ((3, "op", "op"), string, ({||})) ) in
   let merge_reference = Runtime'.Merge.merge Runtime'.Spec.( basic ((4, "reference", "reference"), string, ({||})) ) in
-  let merge_snapshot = Runtime'.Merge.merge Runtime'.Spec.( basic_opt ((5, "snapshot", "snapshot"), string) ) in
+  let merge_oneof_snapshot__Vm = Runtime'.Merge.merge Runtime'.Spec.( basic_req ((0, "", ""), (message (module Vm_record))) ) in
+  let merge_oneof_snapshot__Host = Runtime'.Merge.merge Runtime'.Spec.( basic_req ((0, "", ""), (message (module Host_record))) ) in
   fun t1 t2 -> {
   	id = (merge_id t1.id t2.id);
   	ty = (merge_ty t1.ty t2.ty);
   	op = (merge_op t1.op t2.op);
   	reference = (merge_reference t1.reference t2.reference);
-  	snapshot = (merge_snapshot t1.snapshot t2.snapshot);
+  	snapshot = (match (t1.snapshot, t2.snapshot) with
+  	| (`Vm v1, `Vm v2) -> `Vm (merge_oneof_snapshot__Vm v1 v2)
+  	| (`Host v1, `Host v2) -> `Host (merge_oneof_snapshot__Host v1 v2)
+  	| (v1, `not_set) -> v1
+  	| (_, v2) -> v2);
    }
-  let spec () = Runtime'.Spec.( basic ((1, "id", "id"), string, ({||})) ^:: basic ((2, "ty", "ty"), string, ({||})) ^:: basic ((3, "op", "op"), string, ({||})) ^:: basic ((4, "reference", "reference"), string, ({||})) ^:: basic_opt ((5, "snapshot", "snapshot"), string) ^:: nil )
+  let spec () = Runtime'.Spec.( basic ((1, "id", "id"), string, ({||})) ^:: basic ((2, "ty", "ty"), string, ({||})) ^:: basic ((3, "op", "op"), string, ({||})) ^:: basic ((4, "reference", "reference"), string, ({||})) ^:: oneof (([ oneof_elem ((6, "vm", "vm"), (message (module Vm_record)), ((fun v -> `Vm v), (function `Vm v -> v | _ -> raise (Invalid_argument "Cannot destruct given oneof")))); oneof_elem ((7, "host", "host"), (message (module Host_record)), ((fun v -> `Host v), (function `Host v -> v | _ -> raise (Invalid_argument "Cannot destruct given oneof")))) ], (function | `not_set -> failwith "Impossible case" | `Vm _ -> 0 | `Host _ -> 1))) ^:: nil )
   let to_proto' =
     let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
     fun writer { id; ty; op; reference; snapshot } -> serialize writer id ty op reference snapshot

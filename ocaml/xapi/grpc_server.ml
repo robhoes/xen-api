@@ -131,7 +131,7 @@ module Host = struct
 end
 
 module Event = struct
-  let from_inner http_req fd session_id token =
+  let from_inner http_req fd session_id classes token =
     let __call = "event.from" in
 
     let __label = __call in
@@ -145,10 +145,9 @@ module Event = struct
       ?subtask_of:(Option.map Ref.of_string subtask_of) @@ fun __context ->
     Server_helpers.dispatch_exn_wrapper @@ fun () ->
 
-    let classes = ["VM"] in
     let timeout = 10. in
     let session_id_rpc = Rpc.String (Ref.string_of session_id) in
-    let classes_rpc = Rpc.Enum [Rpc.String "VM"] in
+    let classes_rpc = Rpc.Enum (List.map Rpc.rpc_of_string classes) in
     let token_rpc = Rpc.String token in
     let timeout_rpc = Rpc.Float timeout in
 
@@ -168,18 +167,35 @@ module Event = struct
     let decode, encode = Service.make_service_functions Event.stream in
     (* Decode the request. *)
     Reader.create buffer |> decode |> function
-    | Ok session_id ->
+    | Ok {session_id; classes} ->
         let session_id' = Ref.of_secret_string session_id in
         let rec loop token =
-          let resp = from_inner http_req fd session_id' token in
+          let resp = from_inner http_req fd session_id' classes token in
           let n, token = match resp.Rpc.contents with
               | Rpc.Dict ["events", Rpc.Enum events; _; "token", Rpc.String token] ->
                   List.iter (fun e' ->
                       let e = Event_types.event_of_rpc e' in
                       let event =
+                        let snapshot =
+                          let open Event_helper in
+                          match record_of_event e with
+                          | VM (_, Some s) ->
+                              `Vm Vm_record.{
+                                  uuid=s.API.vM_uuid
+                                ; name_label=s.API.vM_name_label
+                                ; power_state=API.vm_power_state_to_string s.API.vM_power_state
+                                }
+                          | Host (_, Some s) ->
+                              `Host Host_record.{
+                                  uuid=s.API.host_uuid
+                                ; name_label=s.API.host_name_label
+                                }
+                          | _ -> `not_set
+                        in
                         Event_record.{id = e.id; ty = e.ty;
                           op = API.event_operation_to_string e.op;
-                          reference = e.reference; snapshot = Option.map Jsonrpc.to_string e.snapshot} in
+                          reference = e.reference;
+                          snapshot} in
                       encode event |> Writer.contents |> f)
                     events ;
                   List.length events, token
