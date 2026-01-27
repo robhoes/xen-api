@@ -513,8 +513,14 @@ end = struct
 end
 
 and Event_record : sig
-  type t = (int) [@@deriving show { with_path = false }, eq]
-  val make: ?id:int -> unit -> t
+  type t = {
+    id:string;
+    ty:string;
+    op:string;
+    reference:string;
+    snapshot:string option;
+  } [@@deriving show { with_path = false }, eq]
+  val make: ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
   (** Helper function to generate a message using default values *)
 
   val to_proto: t -> Runtime'.Writer.t
@@ -533,7 +539,7 @@ and Event_record : sig
   (** Fully qualified protobuf name of this message *)
 
   (**/**)
-  type make_t = ?id:int -> unit -> t
+  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
   val merge: t -> t -> t
   val to_proto': Runtime'.Writer.t -> t -> unit
   val from_proto_exn: Runtime'.Reader.t -> t
@@ -542,27 +548,43 @@ and Event_record : sig
 end = struct
   module This'_ = Event_record
   let name () = ".event_record"
-  type t = (int) [@@deriving show { with_path = false }, eq]
-  type make_t = ?id:int -> unit -> t
-  let make ?(id = 0) () = (id)
+  type t = {
+    id:string;
+    ty:string;
+    op:string;
+    reference:string;
+    snapshot:string option;
+  } [@@deriving show { with_path = false }, eq]
+  type make_t = ?id:string -> ?ty:string -> ?op:string -> ?reference:string -> ?snapshot:string -> unit -> t
+  let make ?(id = {||}) ?(ty = {||}) ?(op = {||}) ?(reference = {||}) ?snapshot () = { id; ty; op; reference; snapshot }
   let merge =
-  let merge_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "id", "id"), int64_int, (0)) ) in
-  fun (t1_id) (t2_id) -> merge_id t1_id t2_id
-  let spec () = Runtime'.Spec.( basic ((1, "id", "id"), int64_int, (0)) ^:: nil )
+  let merge_id = Runtime'.Merge.merge Runtime'.Spec.( basic ((1, "id", "id"), string, ({||})) ) in
+  let merge_ty = Runtime'.Merge.merge Runtime'.Spec.( basic ((2, "ty", "ty"), string, ({||})) ) in
+  let merge_op = Runtime'.Merge.merge Runtime'.Spec.( basic ((3, "op", "op"), string, ({||})) ) in
+  let merge_reference = Runtime'.Merge.merge Runtime'.Spec.( basic ((4, "reference", "reference"), string, ({||})) ) in
+  let merge_snapshot = Runtime'.Merge.merge Runtime'.Spec.( basic_opt ((5, "snapshot", "snapshot"), string) ) in
+  fun t1 t2 -> {
+  	id = (merge_id t1.id t2.id);
+  	ty = (merge_ty t1.ty t2.ty);
+  	op = (merge_op t1.op t2.op);
+  	reference = (merge_reference t1.reference t2.reference);
+  	snapshot = (merge_snapshot t1.snapshot t2.snapshot);
+   }
+  let spec () = Runtime'.Spec.( basic ((1, "id", "id"), string, ({||})) ^:: basic ((2, "ty", "ty"), string, ({||})) ^:: basic ((3, "op", "op"), string, ({||})) ^:: basic ((4, "reference", "reference"), string, ({||})) ^:: basic_opt ((5, "snapshot", "snapshot"), string) ^:: nil )
   let to_proto' =
     let serialize = Runtime'.apply_lazy (fun () -> Runtime'.Serialize.serialize (spec ())) in
-    fun writer (id) -> serialize writer id
+    fun writer { id; ty; op; reference; snapshot } -> serialize writer id ty op reference snapshot
 
   let to_proto t = let writer = Runtime'.Writer.init () in to_proto' writer t; writer
   let from_proto_exn =
-    let constructor id = (id) in
+    let constructor id ty op reference snapshot = { id; ty; op; reference; snapshot } in
     Runtime'.apply_lazy (fun () -> Runtime'.Deserialize.deserialize (spec ()) constructor)
   let from_proto writer = Runtime'.Result.catch (fun () -> from_proto_exn writer)
   let to_json options =
     let serialize = Runtime'.Serialize_json.serialize ~message_name:(name ()) (spec ()) options in
-    fun (id) -> serialize id
+    fun { id; ty; op; reference; snapshot } -> serialize id ty op reference snapshot
   let from_json_exn =
-    let constructor id = (id) in
+    let constructor id ty op reference snapshot = { id; ty; op; reference; snapshot } in
     Runtime'.apply_lazy (fun () -> Runtime'.Deserialize_json.deserialize ~message_name:(name ()) (spec ()) constructor)
   let from_json json = Runtime'.Result.catch (fun () -> from_json_exn json)
 end

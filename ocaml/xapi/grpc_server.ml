@@ -172,14 +172,20 @@ module Event = struct
         let session_id' = Ref.of_secret_string session_id in
         let rec loop token =
           let resp = from_inner http_req fd session_id' token in
-          let events, token = match resp.Rpc.contents with
-              | Rpc.Dict ["events", Rpc.Enum x; _; "token", Rpc.String token] ->
-                  List.length x, token
+          let n, token = match resp.Rpc.contents with
+              | Rpc.Dict ["events", Rpc.Enum events; _; "token", Rpc.String token] ->
+                  List.iter (fun e' ->
+                      let e = Event_types.event_of_rpc e' in
+                      let event =
+                        Event_record.{id = e.id; ty = e.ty;
+                          op = API.event_operation_to_string e.op;
+                          reference = e.reference; snapshot = Option.map Jsonrpc.to_string e.snapshot} in
+                      encode event |> Writer.contents |> f)
+                    events ;
+                  List.length events, token
               | _ -> 0, ""
           in
-          debug "event count = %d, token = %s" events token ;
-          if events > 0 then
-            encode events |> Writer.contents |> f ;
+          debug "event count = %d, token = %s" n token ;
           if token <> "" then
             loop token
         in
